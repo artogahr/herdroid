@@ -14,7 +14,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 
 class ClaudeTranscriptParser : TranscriptParser {
-    var title: String? = null
+    override var title: String? = null
         private set
 
     private val json = Json { isLenient = true }

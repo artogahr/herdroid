@@ -99,4 +99,20 @@ data class Snapshot(
     @SerialName("focused_workspace_id") val focusedWorkspaceId: String? = null,
     @SerialName("focused_tab_id") val focusedTabId: String? = null,
     @SerialName("focused_pane_id") val focusedPaneId: String? = null,
-)
+) {
+    /**
+     * Panes in swipe order for a workspace: tabs in order, and panes within a tab in reading
+     * order. Swiping past a tab's last pane continues into the next tab.
+     */
+    fun swipeOrder(workspaceId: String): List<Pane> {
+        val byId = panes.filter { it.workspaceId == workspaceId }.associateBy { it.id }
+        return tabs
+            .filter { it.workspaceId == workspaceId }
+            .sortedBy { it.number }
+            .flatMap { tab ->
+                val ordered = layouts.firstOrNull { it.tabId == tab.id }?.paneOrder().orEmpty()
+                val inTab = byId.values.filter { it.tabId == tab.id }
+                ordered.mapNotNull { byId[it] } + inTab.filter { it.id !in ordered }
+            }
+    }
+}

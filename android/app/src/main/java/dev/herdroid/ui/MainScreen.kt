@@ -65,21 +65,41 @@ fun MainScreen(
     reconnecting: ConnectionState.Reconnecting?,
 ) {
     val scope = rememberCoroutineScope()
-    val session = remember(connected) { HerdrSession(scope, connected) }
-    LaunchedEffect(session) { session.start() }
+    // Both outlive reconnects: they keep what they loaded and re-bind to the new link.
+    val session = remember { HerdrSession(scope) }
+    val threads = remember { HashMap<String, ThreadController>() }
+    val live = reconnecting == null
+    LaunchedEffect(connected, live) {
+        if (live) {
+            session.bind(connected)
+            threads.values.forEach { it.rebind(connected) }
+        } else {
+            session.pause()
+            threads.values.forEach { it.deactivate() }
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            session.pause()
+            threads.values.forEach { it.deactivate() }
+        }
+    }
     val snapshot = session.snapshot
     val drawer = rememberDrawerState(DrawerValue.Closed)
     var selectedId by remember { mutableStateOf(connection.lastPaneId) }
     // Per pane: show the terminal instead of the chat.
     val terminalMode = remember { mutableStateMapOf<String, Boolean>() }
-    // One controller per pane for this connection, so swiping back does not reload.
-    val threads = remember(connected) { HashMap<String, ThreadController>() }
 
     fun threadFor(pane: Pane) = threads.getOrPut(pane.id) { ThreadController(scope, connected, pane) }
-    DisposableEffect(threads) { onDispose { threads.values.forEach { it.deactivate() } } }
+
+    // Forget conversations whose pane closed.
+    LaunchedEffect(snapshot) {
+        val open = snapshot?.panes?.map { it.id }?.toSet() ?: return@LaunchedEffect
+        threads.keys.filter { it !in open }.forEach { threads.remove(it)?.deactivate() }
+    }
 
     val selected = snapshot?.let { snap -> snap.panes.firstOrNull { it.id == selectedId } ?: defaultPane(snap) }
-    val pages = selected?.let { session.swipeOrder(it.workspaceId) }.orEmpty()
+    val pages = selected?.let { snapshot.swipeOrder(it.workspaceId) }.orEmpty()
     val latestPages by rememberUpdatedState(pages)
     val pager = rememberPagerState(pageCount = { latestPages.size })
 
@@ -102,9 +122,9 @@ fun MainScreen(
 
     // Only the pane on screen streams; the rest keep what they already loaded.
     val settledId = pages.getOrNull(pager.settledPage)?.id
-    LaunchedEffect(settledId, threads) {
+    LaunchedEffect(settledId, live) {
         threads.forEach { (id, thread) -> if (id != settledId) thread.deactivate() }
-        pages.getOrNull(pager.settledPage)?.takeIf { it.hasChat }?.let { threadFor(it).activate() }
+        if (live) pages.getOrNull(pager.settledPage)?.takeIf { it.hasChat }?.let { threadFor(it).activate() }
     }
     val showTerminal = current != null && (terminalMode[current.id] == true || !current.hasChat)
 
@@ -140,7 +160,7 @@ fun MainScreen(
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawer.open() } }) { Icon(Icons.Filled.Menu, "Spaces and agents") }
                     },
-                    title = { current?.let { PaneTitle(it, snapshot) } },
+                    title = { current?.let { PaneTitle(it, snapshot, threads[it.id]?.title) } },
                     actions = {
                         if (current?.hasChat == true) {
                             IconButton(onClick = { terminalMode[current.id] = !showTerminal }) {
@@ -206,6 +226,7 @@ private fun defaultPane(snap: Snapshot): Pane? =
 private fun PaneTitle(
     pane: Pane,
     snapshot: Snapshot?,
+    conversationTitle: String?,
 ) {
     val space = snapshot?.workspaces?.firstOrNull { it.id == pane.workspaceId }?.label
     val tab = snapshot?.tabs?.firstOrNull { it.id == pane.tabId }?.label
@@ -213,7 +234,12 @@ private fun PaneTitle(
         AgentAvatar(pane.agent, size = 34.dp)
         Spacer(Modifier.width(12.dp))
         Column {
-            Text(pane.displayTitle, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                conversationTitle ?: pane.displayTitle,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 pane.agentStatus?.let {
                     StatusDot(it, size = 7.dp)

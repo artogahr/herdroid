@@ -54,13 +54,15 @@ fun TerminalPane(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var closedReason by remember { mutableStateOf<String?>(null) }
+    var attempt by remember { mutableStateOf(0) }
     var control by remember { mutableStateOf(false) }
     var confirmControl by remember { mutableStateOf(false) }
     var ctrl by remember { mutableStateOf(false) }
     val viewRef = remember { arrayOfNulls<TerminalView>(1) }
     val viewClient = remember { ViewClient(onTap = { viewRef[0]?.let { showKeyboard(context, it) } }) }
     val terminal =
-        remember(pane.id, connected) {
+        remember(pane.id, connected, attempt) {
+            closedReason = null
             RemoteTerminal(
                 scope,
                 connected.transport,
@@ -80,6 +82,9 @@ fun TerminalPane(
                 color = if (closedReason != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
+            if (closedReason != null) {
+                TextButton(onClick = { attempt++ }) { Text("Retry") }
+            }
             FilterChip(
                 selected = control,
                 onClick = {
@@ -104,6 +109,8 @@ fun TerminalPane(
                     viewRef[0] = this
                 }
             },
+            // A retry creates a new session; the view stays and is pointed at it.
+            update = { it.attachSession(terminal.session) },
             modifier = Modifier.weight(1f).fillMaxWidth(),
         )
         if (control) {

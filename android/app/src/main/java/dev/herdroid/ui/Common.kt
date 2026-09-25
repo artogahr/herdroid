@@ -74,5 +74,4 @@ fun AgentAvatar(
 val Pane.displayTitle: String get() = title?.substringBefore(" | ")?.ifBlank { null } ?: name ?: agent ?: "Terminal"
 
 /** Panes with a chat adapter open as a conversation; everything else opens as a terminal. */
-val Pane.hasChat: Boolean
-    get() = (agentSession?.agent ?: agent)?.let { a -> AgentKind.entries.any { it.name.equals(a, ignoreCase = true) } } == true
+val Pane.hasChat: Boolean get() = AgentKind.of(agentSession?.agent ?: agent) != null

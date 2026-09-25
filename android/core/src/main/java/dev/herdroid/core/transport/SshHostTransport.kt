@@ -3,7 +3,9 @@ package dev.herdroid.core.transport
 import com.hierynomus.sshj.key.KeyAlgorithms
 import dev.herdroid.core.herdr.shellQuote
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
@@ -31,14 +33,28 @@ class SshHostTransport private constructor(
 
     override suspend fun run(command: String): String =
         withContext(Dispatchers.IO) {
-            client.startSession().use { session ->
+            val session = client.startSession()
+            // Never interrupt a thread inside sshj (it may be writing a packet); closing the
+            // session from a watchdog is what unblocks a read stuck on a hung command.
+            val timedOut = AtomicBoolean(false)
+            val watchdog =
+                launch {
+                    delay(RUN_TIMEOUT_MS)
+                    timedOut.set(true)
+                    runCatching { session.close() }
+                }
+            try {
                 val cmd = session.exec(posix(command))
                 val out = cmd.inputStream.readBytes().decodeToString()
                 val err = cmd.errorStream.readBytes().decodeToString()
-                cmd.join(30, TimeUnit.SECONDS)
-                val status = cmd.exitStatus
-                if (status != null && status != 0) throw IOException("`$command` exited $status: ${err.trim()}")
+                cmd.join(10, TimeUnit.SECONDS)
+                if (timedOut.get()) throw IOException("`$command` timed out")
+                val status = cmd.exitStatus ?: throw IOException("`$command` did not report an exit status")
+                if (status != 0) throw IOException("`$command` exited $status: ${err.trim()}")
                 out
+            } finally {
+                watchdog.cancel()
+                runCatching { session.close() }
             }
         }
 
@@ -53,6 +69,8 @@ class SshHostTransport private constructor(
     private fun posix(command: String) = "sh -c ${shellQuote(command)}"
 
     companion object {
+        const val RUN_TIMEOUT_MS = 60_000L
+
         suspend fun connect(
             host: String,
             port: Int,

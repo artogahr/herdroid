@@ -4,7 +4,17 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
 @Serializable
-enum class AgentKind { CLAUDE, CODEX, KIMI }
+enum class AgentKind {
+    CLAUDE,
+    CODEX,
+    KIMI,
+    ;
+
+    companion object {
+        /** The kind for a herdr agent name such as "claude", or null when there is no chat adapter. */
+        fun of(name: String?): AgentKind? = name?.let { n -> entries.firstOrNull { it.name.equals(n, ignoreCase = true) } }
+    }
+}
 
 @Serializable
 enum class Role { USER, ASSISTANT, SYSTEM, TOOL }

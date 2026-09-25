@@ -9,4 +9,7 @@ import dev.herdroid.core.model.Message
  */
 interface TranscriptParser {
     fun feed(line: String): List<Message>
+
+    /** The conversation's own title, when the agent records one. */
+    val title: String? get() = null
 }

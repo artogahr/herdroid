@@ -35,11 +35,12 @@ sealed interface ConnectionState {
     data object Connecting : ConnectionState
 
     data class Connected(
-        val api: HerdrApi,
-        val transcripts: TranscriptSource,
         val transport: SshHostTransport,
         val herdrPath: String,
-    ) : ConnectionState
+    ) : ConnectionState {
+        val api = HerdrApi(transport, herdrPath)
+        val transcripts = TranscriptSource(transport)
+    }
 
     /** The link dropped (for example while the phone slept); screens keep showing [last]. */
     data class Reconnecting(
@@ -50,6 +51,12 @@ sealed interface ConnectionState {
 
     data class Failed(
         val message: String,
+    ) : ConnectionState
+
+    /** The host presented a key we have not trusted: first contact, or a changed key. */
+    data class HostKeyCheck(
+        val fingerprint: String,
+        val previous: String?,
     ) : ConnectionState
 }
 
@@ -69,6 +76,7 @@ class Connection(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Mutex()
     private var watchdog: Job? = null
+    private var reconnectJob: Job? = null
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val state: StateFlow<ConnectionState> = _state
 
@@ -89,8 +97,10 @@ class Connection(
                 putString("user", value.user)
             }
 
-    /** Host key pinned on first successful connect (trust on first use). */
-    val pinnedHostKey: String? get() = prefs.getString("hostkey:${config.host}:${config.port}", null)
+    private val HostConfig.hostKeyPref get() = "hostkey:$host:$port"
+    private val HostConfig.herdrPref get() = "herdr:$user@$host:$port"
+
+    val pinnedHostKey: String? get() = prefs.getString(config.hostKeyPref, null)
 
     /** Connect at launch when this host has worked before. */
     fun autoConnect() {
@@ -100,25 +110,43 @@ class Connection(
     }
 
     suspend fun connect() {
+        reconnectJob?.cancel()
         lock.withLock {
+            _state.value.session?.let { old -> scope.launch { runCatching { old.transport.close() } } }
             _state.value = ConnectionState.Connecting
-            _state.value = open().fold({ it }, { ConnectionState.Failed(it.message ?: it.javaClass.simpleName) })
+            _state.value = open().toState()
         }
         startWatchdog()
     }
 
+    /** The user checked the fingerprint; pin it and connect. */
+    suspend fun trustHostKey(fingerprint: String) {
+        prefs.edit { putString(config.hostKeyPref, fingerprint) }
+        connect()
+    }
+
     /** Call when the app returns to the foreground: sockets rarely survive a sleeping phone. */
     fun onForeground() {
-        val current = _state.value
-        if (current is ConnectionState.Connected && !current.transport.isAlive) scope.launch { reconnect(current) }
+        when (val current = _state.value) {
+            is ConnectionState.Connected -> {
+                if (!current.transport.isAlive) reconnect(current)
+            }
+
+            is ConnectionState.Failed -> {
+                if (config.complete && pinnedHostKey != null) scope.launch { connect() }
+            }
+
+            else -> {}
+        }
     }
 
     fun disconnect() {
+        reconnectJob?.cancel()
         watchdog?.cancel()
-        _state.value.session
-            ?.transport
-            ?.close()
+        val old = _state.value.session
         _state.value = ConnectionState.Disconnected
+        // Closing blocks on the network; never on the main thread.
+        old?.let { scope.launch { runCatching { it.transport.close() } } }
     }
 
     private fun startWatchdog() {
@@ -133,69 +161,115 @@ class Connection(
             }
     }
 
-    private suspend fun reconnect(previous: ConnectionState.Connected) {
-        lock.withLock {
-            if (_state.value != previous) return
-            runCatching { previous.transport.close() }
-            var attempt = 1
-            var error: String? = null
-            while (true) {
-                _state.value = ConnectionState.Reconnecting(previous, attempt, error)
-                val result = open()
-                val next = result.getOrNull()
-                if (next != null) {
-                    _state.value = next
-                    return
+    private fun reconnect(previous: ConnectionState.Connected) {
+        if (reconnectJob?.isActive == true) return
+        reconnectJob =
+            scope.launch {
+                runCatching { previous.transport.close() }
+                var error: String? = null
+                for (attempt in 1..MAX_RECONNECTS) {
+                    // The lock guards one attempt, so a manual connect() is never starved.
+                    val result =
+                        lock.withLock {
+                            val now = _state.value
+                            if (now != previous && now !is ConnectionState.Reconnecting) return@launch
+                            _state.value = ConnectionState.Reconnecting(previous, attempt, error)
+                            open()
+                        }
+                    result.onSuccess {
+                        _state.value = it
+                        return@launch
+                    }
+                    val failure = result.exceptionOrNull()
+                    if (failure is HostKeyMismatch) {
+                        _state.value = failure.state
+                        return@launch
+                    }
+                    error = failure?.message
+                    delay((1_000L shl (attempt - 1).coerceAtMost(4)).coerceAtMost(15_000))
                 }
-                error = result.exceptionOrNull()?.message
-                delay((1_000L shl (attempt - 1).coerceAtMost(4)).coerceAtMost(15_000))
-                attempt++
-                if (_state.value !is ConnectionState.Reconnecting) return
+                // Stop draining the battery; returning to the app tries again.
+                _state.value = ConnectionState.Failed("Could not reach ${config.host}: ${error ?: "no answer"}")
             }
-        }
     }
 
-    private suspend fun open(): Result<ConnectionState.Connected> =
-        runCatching {
-            val cfg = config
-            val transport = SshHostTransport.connect(cfg.host, cfg.port, cfg.user, SshKeys.keyProvider(keyPair), verifier(cfg))
+    private fun Result<ConnectionState.Connected>.toState(): ConnectionState =
+        fold(
+            { it },
+            { e -> (e as? HostKeyMismatch)?.state ?: ConnectionState.Failed(e.message ?: e.javaClass.simpleName) },
+        )
+
+    private suspend fun open(): Result<ConnectionState.Connected> {
+        val cfg = config
+        val seen = arrayOfNulls<String>(1)
+        return runCatching {
+            val transport =
+                try {
+                    SshHostTransport.connect(cfg.host, cfg.port, cfg.user, SshKeys.keyProvider(keyPair), verifier(cfg, seen))
+                } catch (e: Exception) {
+                    val presented = seen[0]
+                    if (presented !=
+                        null
+                    ) {
+                        throw HostKeyMismatch(ConnectionState.HostKeyCheck(presented, prefs.getString(cfg.hostKeyPref, null)))
+                    }
+                    throw e
+                }
             try {
-                val herdr = prefs.getString("herdr:${cfg.host}", null) ?: HerdrApi.locateHerdr(transport)
-                check(HerdrApi.checkBridge(transport, herdr)) { "herdr at $herdr has no remote-api-bridge" }
-                prefs.edit { putString("herdr:${cfg.host}", herdr) }
-                ConnectionState.Connected(HerdrApi(transport, herdr), TranscriptSource(transport), transport, herdr)
+                ConnectionState.Connected(transport = transport, herdrPath = herdrPath(cfg, transport))
             } catch (e: Exception) {
                 transport.close()
                 throw e
             }
         }
+    }
 
-    private fun verifier(cfg: HostConfig) =
-        object : HostKeyVerifier {
-            val prefKey = "hostkey:${cfg.host}:${cfg.port}"
-
-            override fun verify(
-                hostname: String,
-                port: Int,
-                key: PublicKey,
-            ): Boolean {
-                val fingerprint = SshKeys.fingerprint(key)
-                val pinned = prefs.getString(prefKey, null)
-                if (pinned == null) {
-                    prefs.edit { putString(prefKey, fingerprint) }
-                    return true
-                }
-                return pinned == fingerprint
-            }
-
-            override fun findExistingAlgorithms(
-                hostname: String,
-                port: Int,
-            ): List<String> = emptyList()
+    /** The cached herdr path, located again once if it stopped working (e.g. after a nix gc). */
+    private suspend fun herdrPath(
+        cfg: HostConfig,
+        transport: SshHostTransport,
+    ): String {
+        prefs.getString(cfg.herdrPref, null)?.let { cached ->
+            if (runCatching { HerdrApi.checkBridge(transport, cached) }.getOrDefault(false)) return cached
         }
+        val found = HerdrApi.locateHerdr(transport)
+        check(HerdrApi.checkBridge(transport, found)) { "herdr at $found has no remote-api-bridge" }
+        prefs.edit { putString(cfg.herdrPref, found) }
+        return found
+    }
+
+    /** Accepts only the pinned key; records any other key so the user can decide. */
+    private fun verifier(
+        cfg: HostConfig,
+        seen: Array<String?>,
+    ) = object : HostKeyVerifier {
+        override fun verify(
+            hostname: String,
+            port: Int,
+            key: PublicKey,
+        ): Boolean {
+            val fingerprint = SshKeys.fingerprint(key)
+            if (prefs.getString(cfg.hostKeyPref, null) == fingerprint) return true
+            seen[0] = fingerprint
+            return false
+        }
+
+        override fun findExistingAlgorithms(
+            hostname: String,
+            port: Int,
+        ): List<String> = emptyList()
+    }
 
     /** Last pane the user looked at, to reopen on launch. */
     var lastPaneId: String?
         get() = prefs.getString("lastPane", null)
         set(value) = prefs.edit { putString("lastPane", value) }
+
+    private class HostKeyMismatch(
+        val state: ConnectionState.HostKeyCheck,
+    ) : Exception("host key not trusted")
+
+    private companion object {
+        const val MAX_RECONNECTS = 12
+    }
 }
