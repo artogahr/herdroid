@@ -157,6 +157,11 @@ private fun Conversation(thread: ThreadController) {
         verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.Bottom),
     ) {
         item(key = "bottom") { Spacer(Modifier.size(8.dp)) }
+        if (thread.matchedByFolder) {
+            item(key = "folder-note") {
+                NoticeRow("herdr did not report this session; showing the latest one from this folder")
+            }
+        }
         if (thread.status == AgentStatus.WORKING) item(key = "working") { WorkingIndicator() }
         items(thread.outgoing.asReversed(), key = {
             "out-" + it.id

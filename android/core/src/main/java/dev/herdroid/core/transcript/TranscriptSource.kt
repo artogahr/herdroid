@@ -47,6 +47,67 @@ class TranscriptSource(
     }
 
     /**
+     * For an agent herdr knows no session for (for example after `codex resume`): the newest
+     * transcript of [kind] started in [cwd] and written since the agent process [pid] started.
+     * Written-since rules out showing an older conversation for a brand-new agent. Sessions
+     * whose ids are in [exclude] belong to other panes.
+     */
+    suspend fun locateByFolder(
+        kind: AgentKind,
+        cwd: String,
+        pid: Int,
+        exclude: Set<String>,
+    ): String? {
+        val jsonCwd = cwd.replace("\\", "\\\\").replace("\"", "\\\"")
+        val candidates =
+            when (kind) {
+                AgentKind.CLAUDE -> {
+                    "ls \"\$HOME/.claude/projects/\"${shellQuote(claudeProjectDir(cwd))}/*.jsonl 2>/dev/null"
+                }
+
+                AgentKind.CODEX -> {
+                    "find \"\$HOME/.codex/sessions\" -name 'rollout-*.jsonl' -mtime -30 2>/dev/null | " +
+                        "while read -r f; do head -c 8192 \"\$f\" | grep -qF ${shellQuote("\"cwd\":\"$jsonCwd\"")} && echo \"\$f\"; done"
+                }
+
+                AgentKind.KIMI -> {
+                    "grep -F ${shellQuote("\"workDir\":\"$jsonCwd\"")} \"\$HOME/.kimi-code/session_index.jsonl\" 2>/dev/null | " +
+                        "sed -n 's/.*\"sessionId\":\"\\([^\"]*\\)\".*\"sessionDir\":\"\\([^\"]*\\)\".*/\\2\\/\\1\\/agents\\/main\\/wire.jsonl/p'"
+                }
+            }
+        val script =
+            "echo \"now \$(date +%s)\"; echo \"etime \$(ps -o etime= -p $pid | tr -d ' ')\"; " +
+                "($candidates) | while read -r f; do [ -f \"\$f\" ] || continue; " +
+                "m=\$(stat -c %Y \"\$f\" 2>/dev/null || stat -f %m \"\$f\"); echo \"file \$m \$f\"; done"
+        val out = runCatching { transport.run(script) }.getOrNull() ?: return null
+        val now =
+            out
+                .lineSequence()
+                .firstOrNull { it.startsWith("now ") }
+                ?.substringAfter(' ')
+                ?.trim()
+                ?.toLongOrNull() ?: return null
+        val elapsed =
+            out
+                .lineSequence()
+                .firstOrNull { it.startsWith("etime ") }
+                ?.substringAfter(' ')
+                ?.let(::parseEtime) ?: return null
+        val started = now - elapsed
+        return out
+            .lineSequence()
+            .filter { it.startsWith("file ") }
+            .mapNotNull { line ->
+                val parts = line.split(' ', limit = 3)
+                val mtime = parts.getOrNull(1)?.toLongOrNull() ?: return@mapNotNull null
+                val path = parts.getOrNull(2) ?: return@mapNotNull null
+                mtime to path
+            }.filter { (mtime, path) -> mtime >= started && exclude.none { it in path } }
+            .maxByOrNull { it.first }
+            ?.second
+    }
+
+    /**
      * Streams lines from [offset] onwards and keeps following the file as it grows. Offsets
      * count bytes, so they must always sit on a line boundary returned by this function.
      */
@@ -106,6 +167,15 @@ class TranscriptSource(
     }
 
     companion object {
+        /** `ps -o etime` format: [[dd-]hh:]mm:ss, in seconds. */
+        fun parseEtime(etime: String): Long? {
+            val trimmed = etime.trim().ifEmpty { return null }
+            val days = trimmed.substringBefore('-', "0").takeIf { '-' in trimmed }?.toLongOrNull() ?: 0
+            val clock = trimmed.substringAfter('-').split(':').map { it.toLongOrNull() ?: return null }
+            val seconds = clock.foldIndexed(0L) { i, acc, v -> acc + v * listOf(1L, 60L, 3600L)[clock.size - 1 - i] }
+            return days * 86_400 + seconds
+        }
+
         fun parserFor(kind: AgentKind): TranscriptParser =
             when (kind) {
                 AgentKind.CLAUDE -> ClaudeTranscriptParser()

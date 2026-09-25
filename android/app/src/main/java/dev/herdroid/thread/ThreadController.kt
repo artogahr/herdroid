@@ -5,7 +5,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import dev.herdroid.core.herdr.AgentSession
 import dev.herdroid.core.herdr.AgentStatus
 import dev.herdroid.core.herdr.HerdrApi
 import dev.herdroid.core.herdr.HerdrApiException
@@ -48,6 +47,8 @@ class ThreadController(
     private val scope: CoroutineScope,
     private var connected: ConnectionState.Connected,
     val pane: Pane,
+    /** Session ids other panes own, so a folder match never takes another pane's conversation. */
+    private val otherSessions: () -> Set<String> = { emptySet() },
 ) {
     private val api: HerdrApi get() = connected.api
 
@@ -72,6 +73,10 @@ class ThreadController(
     var awaitingFirstMessage by mutableStateOf(false)
         private set
     var hasOlder by mutableStateOf(false)
+        private set
+
+    /** herdr had no session for this agent; the conversation was found by folder and start time. */
+    var matchedByFolder by mutableStateOf(false)
         private set
 
     private val outbox = Outbox()
@@ -274,10 +279,43 @@ class ThreadController(
     )
 
     private suspend fun locate(kind: AgentKind): String? {
-        val session = pane.agentSession ?: waitForSession()
+        pane.agentSession?.let { return locateSession(kind, it.value) }
+        // herdr knows no session: resumed or imported sessions (e.g. `codex resume`) often
+        // skip the hook that reports it, and a brand-new agent has none until its first prompt.
+        var announced = false
+        while (true) {
+            locateByFolder(kind)?.let {
+                awaitingFirstMessage = false
+                matchedByFolder = true
+                loading = true
+                return it
+            }
+            val live =
+                runCatching { api.request("pane.get", buildJsonObject { put("pane_id", pane.id) }) }
+                    .getOrNull()
+                    ?.get("pane")
+                    ?.let { HerdrApi.json.decodeFromJsonElement(Pane.serializer(), it) }
+            live?.agentSession?.let {
+                awaitingFirstMessage = false
+                loading = true
+                return locateSession(kind, it.value)
+            }
+            if (!announced) {
+                announced = true
+                loading = false
+                awaitingFirstMessage = true
+            }
+            delay(2_000)
+        }
+    }
+
+    private suspend fun locateSession(
+        kind: AgentKind,
+        sessionId: String,
+    ): String? {
         repeat(5) {
             val found =
-                runCatching { connected.transcripts.locate(kind, session.value, pane.cwd) }
+                runCatching { connected.transcripts.locate(kind, sessionId, pane.cwd) }
                     .onFailure { Log.w(TAG, "locating transcript failed", it) }
                     .getOrNull()
             if (found != null) return found
@@ -288,23 +326,19 @@ class ThreadController(
         return null
     }
 
-    /** herdr learns a new agent's session from its hooks, usually at the first prompt. */
-    private suspend fun waitForSession(): AgentSession {
-        loading = false
-        awaitingFirstMessage = true
-        while (true) {
-            val live =
-                runCatching { api.request("pane.get", buildJsonObject { put("pane_id", pane.id) }) }
-                    .getOrNull()
-                    ?.get("pane")
-                    ?.let { HerdrApi.json.decodeFromJsonElement(Pane.serializer(), it) }
-            live?.agentSession?.let {
-                awaitingFirstMessage = false
-                loading = true
-                return it
-            }
-            delay(2_000)
-        }
+    private suspend fun locateByFolder(kind: AgentKind): String? {
+        val process =
+            runCatching { api.request("pane.process_info", buildJsonObject { put("pane_id", pane.id) }) }
+                .getOrNull()
+                ?.get("process_info")
+                ?.jsonObject
+                ?.get("foreground_processes")
+                ?.let { it as? JsonArray }
+                ?.firstOrNull()
+                ?.jsonObject ?: return null
+        val pid = process["pid"]?.jsonPrimitive?.content?.toIntOrNull() ?: return null
+        val cwd = process["cwd"]?.jsonPrimitive?.content ?: pane.cwd ?: return null
+        return connected.transcripts.locateByFolder(kind, cwd, pid, otherSessions())
     }
 
     private suspend fun followStatus() {
