@@ -92,7 +92,19 @@ fun MainScreen(
     // Per pane: show the terminal instead of the chat.
     val terminalMode = remember { mutableStateMapOf<String, Boolean>() }
 
-    fun threadFor(pane: Pane) = threads.getOrPut(pane.id) { ThreadController(scope, connected, pane) }
+    val latestSnapshot by rememberUpdatedState(snapshot)
+
+    fun threadFor(pane: Pane) =
+        threads.getOrPut(pane.id) {
+            ThreadController(scope, connected, pane) {
+                latestSnapshot
+                    ?.panes
+                    ?.filter { it.id != pane.id }
+                    ?.mapNotNull { it.agentSession?.value }
+                    ?.toSet()
+                    .orEmpty()
+            }
+        }
 
     // Forget conversations whose pane closed.
     LaunchedEffect(snapshot) {
