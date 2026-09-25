@@ -20,7 +20,8 @@ kotlin {
 dependencies {
     api(libs.kotlinx.serialization.json)
     api(libs.kotlinx.coroutines.android)
-    implementation(libs.sshj)
+    api(libs.sshj)
+    implementation(libs.bouncycastle.prov)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 }
