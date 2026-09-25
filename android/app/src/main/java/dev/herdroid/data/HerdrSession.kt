@@ -70,6 +70,11 @@ class HerdrSession(
             }
     }
 
+    /** Fetch the snapshot now, after the app changed something. */
+    fun refreshNow() {
+        refresh.trySend(Unit)
+    }
+
     /** Stop polling while the link is down; every attempt would fail. */
     fun pause() {
         job?.cancel()
