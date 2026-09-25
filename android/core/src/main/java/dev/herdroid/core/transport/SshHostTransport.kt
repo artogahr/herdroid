@@ -88,14 +88,13 @@ class SshHostTransport private constructor(
                                 .filterNot { it.name.startsWith("chacha20") }
                                 .sortedBy { if (it.name.contains("gcm")) 0 else 1 }
                         val ecdsa256 = KeyType.ECDSA256.toString()
+                        val ed25519 = KeyType.ED25519.toString()
                         keyAlgorithms =
                             keyAlgorithms.map {
-                                if (it.name ==
-                                    ecdsa256
-                                ) {
-                                    KeyAlgorithms.Factory(ecdsa256, KeystoreEcdsaSignature.Factory256(), KeyType.ECDSA256)
-                                } else {
-                                    it
+                                when (it.name) {
+                                    ecdsa256 -> KeyAlgorithms.Factory(ecdsa256, KeystoreEcdsaSignature.Factory256(), KeyType.ECDSA256)
+                                    ed25519 -> KeyAlgorithms.Factory(ed25519, KeystoreEd25519Signature.Factory256(), KeyType.ED25519)
+                                    else -> it
                                 }
                             }
                     }

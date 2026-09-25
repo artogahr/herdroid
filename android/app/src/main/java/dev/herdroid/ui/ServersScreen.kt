@@ -102,7 +102,7 @@ fun ServersScreen(
                     onEdit = { editing = host },
                 )
             }
-            item { DeviceKeyCard(connection.authorizedKeysLine) }
+            item { DeviceKeyCard(connection.authorizedKeysLine, connection.keyStorage) }
         }
     }
 
@@ -222,7 +222,10 @@ private fun HostEditor(
 }
 
 @Composable
-private fun DeviceKeyCard(pubkey: String) {
+private fun DeviceKeyCard(
+    pubkey: String,
+    storage: String,
+) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     var open by remember { mutableStateOf(false) }
@@ -232,11 +235,17 @@ private fun DeviceKeyCard(pubkey: String) {
                 Icon(Icons.Filled.Key, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(16.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("This phone's key", style = MaterialTheme.typography.titleMedium)
+                    Text("This phone's public key", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Add it to ~/.ssh/authorized_keys on each server.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "The private key never leaves the phone and cannot be exported. It is stored $storage.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
                     )
                 }
             }

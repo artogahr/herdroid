@@ -105,4 +105,23 @@ class SshLiveTest {
                 }
         }
     }
+
+    @Test
+    fun ed25519KeyAuthenticates() {
+        val port = System.getenv("HERDROID_SSHD_PORT")?.toIntOrNull()
+        val authKeys = System.getenv("HERDROID_SSHD_AUTHKEYS")
+        assumeTrue(port != null && authKeys != null)
+        SshKeys.installProvider()
+        val raw = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        // The same wrapper and signer the phone uses with its Keystore key.
+        val pair = java.security.KeyPair(Ed25519PublicKey(raw.public), raw.private)
+        val line = SshKeys.authorizedKeysLine(pair.public, "herdroid-ed25519-test")
+        assertTrue(line, line.startsWith("ssh-ed25519 "))
+        File(authKeys!!).writeText(line + "\n")
+        runBlocking {
+            SshHostTransport
+                .connect("127.0.0.1", port!!, System.getProperty("user.name"), SshKeys.keyProvider(pair), PromiscuousVerifier())
+                .use { ssh -> assertEquals("ok\n", ssh.run("echo ok")) }
+        }
+    }
 }
