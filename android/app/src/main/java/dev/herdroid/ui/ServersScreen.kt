@@ -8,14 +8,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Computer
@@ -33,11 +37,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -52,7 +60,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.herdroid.data.Connection
 import dev.herdroid.data.ConnectionState
+import dev.herdroid.data.Discovery
+import dev.herdroid.data.FoundServer
 import dev.herdroid.data.SavedHost
+import kotlinx.coroutines.flow.Flow
 
 /** Startup screen: saved servers, the one being connected, and this phone's key. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -107,9 +118,11 @@ fun ServersScreen(
     }
 
     editing?.let { host ->
+        val isNew = hosts.none { it.id == host.id }
         HostEditor(
-            initial = host,
-            isNew = hosts.none { it.id == host.id },
+            initial = if (isNew && host.user.isEmpty()) host.copy(user = hosts.firstOrNull()?.user.orEmpty()) else host,
+            isNew = isNew,
+            discover = { Discovery(connection.context).scan(connection.tailnetPeers) },
             onDismiss = { editing = null },
             onSave = { saved, connect ->
                 connection.saveHost(saved)
@@ -172,6 +185,7 @@ private fun ServerCard(
 private fun HostEditor(
     initial: SavedHost,
     isNew: Boolean,
+    discover: () -> Flow<FoundServer>,
     onDismiss: () -> Unit,
     onSave: (SavedHost, Boolean) -> Unit,
     onDelete: () -> Unit,
@@ -207,7 +221,12 @@ private fun HostEditor(
                         modifier = Modifier.weight(1f),
                     )
                 }
-                if (!isNew) {
+                if (isNew) {
+                    NearbyServers(discover) { found ->
+                        host = found.host
+                        if (name.isBlank()) found.name?.let { name = it }
+                    }
+                } else {
                     TextButton(onClick = onDelete) { Text("Delete server", color = MaterialTheme.colorScheme.error) }
                 }
             }
@@ -299,4 +318,55 @@ private fun HostKeyDialog(
         },
         dismissButton = { TextButton(onClick = { connection.disconnect() }) { Text("Cancel") } },
     )
+}
+
+/** SSH servers found on Tailscale, Bonjour and the Wi-Fi subnet; tapping one fills the form. */
+@Composable
+private fun NearbyServers(
+    discover: () -> Flow<FoundServer>,
+    onPick: (FoundServer) -> Unit,
+) {
+    val found = remember { mutableStateListOf<FoundServer>() }
+    var scanning by remember { mutableStateOf(true) }
+    var round by remember { mutableIntStateOf(0) }
+    LaunchedEffect(round) {
+        found.clear()
+        scanning = true
+        runCatching { discover().collect { f -> found += f } }
+            .onFailure { if (it !is kotlinx.coroutines.CancellationException) android.util.Log.w("Discovery", "scan failed", it) }
+        scanning = false
+    }
+    Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Nearby servers", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            if (scanning) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            } else {
+                TextButton(onClick = { round++ }) { Text("Scan again") }
+            }
+        }
+        if (!scanning && found.isEmpty()) {
+            Text(
+                "None found. Servers need SSH on port 22; Tailscale devices appear after connecting to any server once.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        found.sortedBy { it.source.ordinal }.forEach { f ->
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().clickable { onPick(f) },
+            ) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Text(f.name ?: f.host, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        listOfNotNull(f.host.takeIf { f.name != null }, f.source.label, f.software).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
 }
