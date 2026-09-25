@@ -77,6 +77,7 @@ class CodexTranscriptParser : TranscriptParser {
                     remember(
                         Message(
                             stableId("user"),
+                            ts = envelopeTimestamp(raw),
                             role = Role.USER,
                             kind = MessageKind.TEXT,
                             text = payload.string("message"),
@@ -102,7 +103,10 @@ class CodexTranscriptParser : TranscriptParser {
                 )
             }
 
-            "task_started", "task_complete", "item_completed", "token_count", "thread_settings_applied" -> {
+            // agent_message repeats the assistant text already taken from response_item.
+            "task_started", "task_complete", "item_completed", "token_count", "thread_settings_applied", "agent_message",
+            "context_compacted",
+            -> {
                 emptyList()
             }
 
