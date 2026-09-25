@@ -88,11 +88,11 @@ import dev.herdroid.core.herdr.AgentStatus
 import dev.herdroid.core.herdr.Pane
 import dev.herdroid.core.model.Message
 import dev.herdroid.core.model.MessageKind
+import dev.herdroid.core.thread.Outgoing
 import dev.herdroid.core.thread.ThreadItem
 import dev.herdroid.core.thread.ToolSummary
 import dev.herdroid.core.thread.ToolVerb
 import dev.herdroid.data.ConnectionState
-import dev.herdroid.thread.Outgoing
 import dev.herdroid.thread.ThreadController
 
 /** One agent conversation: messages, tool activity, and a floating composer. */

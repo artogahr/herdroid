@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -37,10 +38,12 @@ class HerdrApi(
         params: JsonObject = JsonObject(emptyMap()),
     ): JsonObject {
         val id = "h${ids.incrementAndGet()}"
-        transport.exec(bridge).use { channel ->
-            channel.write(requestLine(id, method, params))
-            val response = json.parseToJsonElement(channel.lines.first()).jsonObject
-            return unwrap(response)
+        // A bridge that dies without answering would otherwise hang the caller forever.
+        return withTimeout(REQUEST_TIMEOUT_MS) {
+            transport.exec(bridge).use { channel ->
+                channel.write(requestLine(id, method, params))
+                unwrap(json.parseToJsonElement(channel.lines.first()).jsonObject)
+            }
         }
     }
 
@@ -91,6 +94,8 @@ class HerdrApi(
     }
 
     companion object {
+        const val REQUEST_TIMEOUT_MS = 20_000L
+
         val json = Json { ignoreUnknownKeys = true }
 
         /**

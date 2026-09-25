@@ -19,19 +19,19 @@ import java.time.Instant
  */
 class KimiTranscriptParser : TranscriptParser {
     private val json = Json { ignoreUnknownKeys = true }
-    private var lineNumber = 0
     private val calls = HashMap<String, Message>()
 
     override fun feed(line: String): List<Message> {
-        lineNumber++
-        val record = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull() ?: return emptyList()
+        val record =
+            runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull()
+                ?: return listOf(Message(contentId("malformed", line), role = Role.SYSTEM, kind = MessageKind.UNKNOWN, raw = line))
         val type = record.string("type") ?: return emptyList()
         val ts = (record["time"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()?.let { Instant.ofEpochMilli(it).toString() }
         return when (type) {
             "turn.prompt" -> {
                 if (record.obj("origin")?.string("kind") != "user") return emptyList()
                 val text = (record["input"] as? JsonArray)?.mapNotNull { (it as? JsonObject)?.string("text") }?.joinToString("\n")
-                listOf(Message(record.string("promptId") ?: "kimi-prompt-$lineNumber", ts, Role.USER, MessageKind.TEXT, text))
+                listOf(Message(record.string("promptId") ?: contentId("prompt", line), ts, Role.USER, MessageKind.TEXT, text))
             }
 
             "context.append_loop_event" -> {
@@ -43,7 +43,7 @@ class KimiTranscriptParser : TranscriptParser {
                 if (reason == null || reason == "completed") {
                     emptyList()
                 } else {
-                    listOf(Message("kimi-end-$lineNumber", ts, Role.SYSTEM, MessageKind.STATUS, "Turn $reason"))
+                    listOf(Message(contentId("end", line), ts, Role.SYSTEM, MessageKind.STATUS, "Turn $reason"))
                 }
             }
 
@@ -58,7 +58,7 @@ class KimiTranscriptParser : TranscriptParser {
         ts: String?,
         raw: String,
     ): List<Message> {
-        val id = e.string("uuid") ?: "kimi-$lineNumber"
+        val id = e.string("uuid") ?: contentId("event", raw)
         val turn = e.string("turnId")
         return when (e.string("type")) {
             "content.part" -> {
@@ -107,6 +107,12 @@ class KimiTranscriptParser : TranscriptParser {
             }
         }
     }
+
+    /** Ids must not depend on where parsing started, so fallbacks hash the record itself. */
+    private fun contentId(
+        kind: String,
+        line: String,
+    ) = "kimi-$kind-${Integer.toHexString(line.hashCode())}"
 
     private fun JsonObject.obj(key: String) = this[key] as? JsonObject
 

@@ -44,7 +44,7 @@ class CodexTranscriptParser : TranscriptParser {
                 listOf(
                     remember(
                         Message(
-                            stableId("compaction"),
+                            stableId("compaction", raw = line),
                             envelope.string("timestamp"),
                             Role.SYSTEM,
                             MessageKind.COMPACTION,
@@ -61,7 +61,7 @@ class CodexTranscriptParser : TranscriptParser {
             }
 
             else -> {
-                listOf(unknown(stableId(type ?: "unknown"), line))
+                listOf(unknown(stableId(type ?: "unknown", raw = line), line))
             }
         }
     }
@@ -76,7 +76,7 @@ class CodexTranscriptParser : TranscriptParser {
                 listOf(
                     remember(
                         Message(
-                            stableId("user"),
+                            stableId("user", raw = raw),
                             ts = envelopeTimestamp(raw),
                             role = Role.USER,
                             kind = MessageKind.TEXT,
@@ -92,7 +92,7 @@ class CodexTranscriptParser : TranscriptParser {
                 listOf(
                     remember(
                         Message(
-                            stableId("turn-aborted"),
+                            stableId("turn-aborted", raw = raw),
                             role = Role.SYSTEM,
                             kind = MessageKind.STATUS,
                             text = payload.string("reason") ?: "Turn aborted",
@@ -111,7 +111,7 @@ class CodexTranscriptParser : TranscriptParser {
             }
 
             else -> {
-                listOf(unknown(stableId(eventType ?: "unknown-event"), raw))
+                listOf(unknown(stableId(eventType ?: "unknown-event", raw = raw), raw))
             }
         }
     }
@@ -122,7 +122,7 @@ class CodexTranscriptParser : TranscriptParser {
     ): List<Message> {
         val itemType = payload.string("type")
         val callId = payload.string("call_id")
-        val id = stableId(itemType ?: "response", callId)
+        val id = stableId(itemType ?: "response", callId, raw, itemId = payload.string("id")?.takeIf { callId == null })
         return when (itemType) {
             "message" -> {
                 val role = payload.string("role")
@@ -223,10 +223,22 @@ class CodexTranscriptParser : TranscriptParser {
         }
     }
 
+    /**
+     * Ids must not depend on where parsing started: history loads in chunks and a thread may
+     * resume mid-file. Prefer the record's own id, then its call id, then its timestamp.
+     */
     private fun stableId(
         type: String,
         callId: String? = null,
-    ) = listOfNotNull("codex-$lineNumber-$type", callId).joinToString("-")
+        raw: String? = null,
+        itemId: String? = null,
+    ): String {
+        itemId?.let { return "codex-$it" }
+        callId?.let { return "codex-$type-$it" }
+        // Records sharing a timestamp are told apart by their content, not by parse order.
+        raw ?: return "codex-$type-line$lineNumber"
+        return "codex-$type-${envelopeTimestamp(raw)}-${Integer.toHexString(raw.hashCode())}"
+    }
 
     private fun remember(message: Message): Message {
         messages[message.id] = message

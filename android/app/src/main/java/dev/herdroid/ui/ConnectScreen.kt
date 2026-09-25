@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -20,6 +21,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,7 +52,15 @@ fun ConnectScreen(
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
-    val pubkey = remember { connection.authorizedKeysLine.also { android.util.Log.i("Herdroid", "public key: $it") } }
+    val pubkey =
+        remember {
+            connection.authorizedKeysLine.also {
+                // Lets adb read the key during development; release builds stay quiet.
+                if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+                    android.util.Log.i("Herdroid", "public key: $it")
+                }
+            }
+        }
 
     Scaffold { padding ->
         Column(
@@ -117,4 +127,42 @@ fun ConnectScreen(
             }
         }
     }
+}
+
+@Composable
+private fun HostKeyDialog(
+    connection: Connection,
+    check: ConnectionState.HostKeyCheck,
+) {
+    val scope = rememberCoroutineScope()
+    val changed = check.previous != null
+    AlertDialog(
+        onDismissRequest = { connection.disconnect() },
+        title = { Text(if (changed) "Host key changed" else "Trust this host?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    if (changed) {
+                        "The host now presents a different key. This happens after reinstalling the machine, " +
+                            "but it can also mean someone is intercepting the connection."
+                    } else {
+                        "Compare this with the host's key: run `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on it."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                check.previous?.let { Text("Was: $it", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+                Text(
+                    (if (changed) "Now: " else "") + check.fingerprint,
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { scope.launch { connection.trustHostKey(check.fingerprint) } }) {
+                Text(if (changed) "Trust new key" else "Trust")
+            }
+        },
+        dismissButton = { TextButton(onClick = { connection.disconnect() }) { Text("Cancel") } },
+    )
 }

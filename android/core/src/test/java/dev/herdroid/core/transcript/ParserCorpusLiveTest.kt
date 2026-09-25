@@ -44,6 +44,10 @@ class ParserCorpusLiveTest {
                 val first = parseAll(kind, text)
                 val again = parseAll(kind, text)
                 assertEquals("${file.name}: ids must be stable across re-parses", first.keys, again.keys)
+                // Starting mid-file (history chunks, resumed threads) must reuse the same ids.
+                val tail = parseAll(kind, text.drop(text.size / 2))
+                val foreign = tail.keys - first.keys
+                assertEquals("${file.name}: ids depend on where parsing started: ${foreign.take(3)}", emptySet<String>(), foreign)
                 messages += first.size
                 unknown += first.values.count { it.kind == MessageKind.UNKNOWN }
                 items += ThreadItems.build(first.values.toList()).size
