@@ -55,6 +55,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -127,20 +128,26 @@ fun MainScreen(
         threads.keys.filter { it !in open }.forEach { threads.remove(it)?.deactivate() }
     }
 
-    // A selection the snapshot does not know yet (a pane just created from the phone) is
-    // pending: keep showing the last pane rather than jumping elsewhere, and let nothing
-    // overwrite it until the next snapshot brings the pane.
+    // Two ways the selected pane can be missing from the snapshot. Never seen: it was just
+    // created from the phone and the next snapshot will bring it, so keep it pending and
+    // keep showing the last pane. Seen before: it closed (an agent or shell exited), so move
+    // to its neighbour in the same space rather than jumping somewhere unrelated.
     var shownId by remember { mutableStateOf<String?>(null) }
-    val pending = snapshot != null && selectedId != null && snapshot.panes.none { it.id == selectedId }
+    val knownIds = remember { HashSet<String>() }
+    snapshot?.panes?.forEach { knownIds += it.id }
+    var lastPages by remember { mutableStateOf<List<Pane>>(emptyList()) }
+    val pending = snapshot != null && selectedId != null && selectedId !in knownIds
     val selected =
         snapshot?.let { snap ->
             snap.panes.firstOrNull { it.id == selectedId }
-                ?: snap.panes.firstOrNull { it.id == shownId }
+                ?: (if (pending) snap.panes.firstOrNull { it.id == shownId } else null)
+                ?: neighbourOf(shownId ?: selectedId, lastPages, snap)
                 ?: defaultPane(snap)
         }
     LaunchedEffect(selected?.id) { shownId = selected?.id }
     val stillPending by rememberUpdatedState(pending)
     val pages = selected?.let { snapshot.swipeOrder(it.workspaceId) }.orEmpty()
+    LaunchedEffect(pages) { if (pages.isNotEmpty()) lastPages = pages }
     // Crash family "LayoutCoordinate operations are only valid when isAttached" / "LayoutNode
     // should be attached to an owner": the pager was force-remeasured while its pages were
     // changing. Two triggers: removing a focused view (the terminal) makes Android search for
@@ -161,7 +168,11 @@ fun MainScreen(
     LaunchedEffect(pager.isScrollInProgress) {
         if (pager.isScrollInProgress) focus.clearFocus(force = true)
     }
-    LaunchedEffect(stablePages.map { it.id }) { focus.clearFocus(force = true) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(stablePages.map { it.id }) {
+        focus.clearFocus(force = true)
+        keyboard?.hide()
+    }
 
     // Opening a pane from the side panel moves the pager to it.
     LaunchedEffect(selected?.id) {
@@ -324,6 +335,21 @@ fun MainScreen(
             },
         )
     }
+}
+
+/** The pane before (or else after) [closedId] in its space, or any pane left in that space. */
+private fun neighbourOf(
+    closedId: String?,
+    lastPages: List<Pane>,
+    snap: Snapshot,
+): Pane? {
+    val at = lastPages.indexOfFirst { it.id == closedId }
+    if (at < 0) return null
+    val alive = snap.panes.associateBy { it.id }
+    val before = lastPages.take(at).asReversed()
+    val after = lastPages.drop(at + 1)
+    return (before + after).firstNotNullOfOrNull { alive[it.id] }
+        ?: snap.panes.firstOrNull { it.workspaceId == lastPages[at].workspaceId }
 }
 
 /** Something that needs the user, else what herdr has focused, else anything. */
