@@ -122,7 +122,7 @@ class CodexTranscriptParser : TranscriptParser {
         return when (itemType) {
             "message" -> {
                 val role = payload.string("role")
-                if (role == "user") return emptyList()
+                if (role == "user" || role == "developer") return emptyList()
                 if (role != "assistant") return listOf(unknown(id, raw))
                 val text =
                     (payload["content"] as? JsonArray)
