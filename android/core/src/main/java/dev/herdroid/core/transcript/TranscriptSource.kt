@@ -38,6 +38,10 @@ class TranscriptSource(
                 AgentKind.CODEX -> {
                     "find \"\$HOME/.codex/sessions\" -name \"*\"$id.jsonl -type f 2>/dev/null | head -n 1"
                 }
+
+                AgentKind.KIMI -> {
+                    "find \"\$HOME/.kimi-code/sessions\" -path \"*/\"$id\"/agents/main/wire.jsonl\" -type f 2>/dev/null | head -n 1"
+                }
             }
         return transport.run(script).trim().ifEmpty { null }
     }
@@ -85,6 +89,7 @@ class TranscriptSource(
             when (kind) {
                 AgentKind.CLAUDE -> ClaudeTranscriptParser()
                 AgentKind.CODEX -> CodexTranscriptParser()
+                AgentKind.KIMI -> KimiTranscriptParser()
             }
 
         /** Claude Code stores projects under the cwd with `/` and `.` replaced by `-`. */

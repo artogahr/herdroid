@@ -72,11 +72,18 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownTypography
+import com.mikepenz.markdown.model.MarkdownTypography
 import dev.herdroid.core.herdr.AgentStatus
 import dev.herdroid.core.herdr.Pane
 import dev.herdroid.core.model.Message
@@ -88,62 +95,47 @@ import dev.herdroid.data.ConnectionState
 import dev.herdroid.thread.Outgoing
 import dev.herdroid.thread.ThreadController
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** One agent conversation: messages, tool activity, and a floating composer. */
 @Composable
-fun ThreadScreen(
+fun ThreadPane(
     connected: ConnectionState.Connected,
     pane: Pane,
-    onTerminal: () -> Unit,
-    onBack: () -> Unit,
+    onOpenTerminal: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val thread = remember(pane.id) { ThreadController(scope, connected, pane) }
+    val thread = remember(pane.id, connected) { ThreadController(scope, connected, pane) }
     LaunchedEffect(thread) { thread.start() }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                },
-                title = {
-                    Column {
-                        Text(
-                            pane.title ?: pane.id,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        StatusLine(pane.agent ?: "shell", thread.status)
-                    }
-                },
-                actions = {
-                    IconButton(onClick = onTerminal) { Icon(Icons.Filled.Terminal, "Terminal") }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(top = padding.calculateTopPadding())
-                .imePadding(),
-        ) {
+    Box(Modifier.fillMaxSize().imePadding()) {
+        Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 Conversation(thread)
+                if (thread.awaitingFirstMessage && thread.items.isEmpty() && thread.outgoing.isEmpty()) {
+                    Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        AgentAvatar(pane.agent, size = 56.dp)
+                        Spacer(Modifier.size(12.dp))
+                        Text("New ${pane.agent} session", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Send a message to start.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 if (thread.loading && thread.items.isEmpty()) {
                     CircularProgressIndicator(Modifier.align(Alignment.Center))
                 }
                 thread.loadError?.let {
                     Text(
                         it,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.align(Alignment.Center).padding(32.dp),
                     )
                 }
             }
             AnimatedVisibility(thread.status == AgentStatus.BLOCKED) {
-                BlockedCard(thread.blockedPrompt, onTerminal)
+                BlockedCard(thread.blockedPrompt, onOpenTerminal)
             }
             Composer(
                 working = thread.status == AgentStatus.WORKING,
@@ -154,29 +146,6 @@ fun ThreadScreen(
         }
     }
 }
-
-@Composable
-private fun StatusLine(
-    agent: String,
-    status: AgentStatus,
-) {
-    val (label, color) = statusStyle(status)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(7.dp).clip(CircleShape).background(color))
-        Spacer(Modifier.width(6.dp))
-        Text("$agent · $label", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-fun statusStyle(status: AgentStatus): Pair<String, Color> =
-    when (status) {
-        AgentStatus.BLOCKED -> "needs your input" to Color(0xFFE5484D)
-        AgentStatus.WORKING -> "working" to Color(0xFF3E8BFF)
-        AgentStatus.DONE -> "done" to Color(0xFF30A46C)
-        AgentStatus.IDLE -> "idle" to MaterialTheme.colorScheme.outline
-        AgentStatus.UNKNOWN -> "unknown" to MaterialTheme.colorScheme.outline
-    }
 
 @Composable
 private fun Conversation(thread: ThreadController) {
@@ -191,7 +160,9 @@ private fun Conversation(thread: ThreadController) {
     ) {
         item(key = "bottom") { Spacer(Modifier.size(8.dp)) }
         if (thread.status == AgentStatus.WORKING) item(key = "working") { WorkingIndicator() }
-        items(thread.outgoing.asReversed(), key = { "out-" + it.id }) { PendingBubble(it, onDismiss = { thread.dismiss(it.id) }) }
+        items(thread.outgoing.asReversed(), key = {
+            "out-" + it.id
+        }) { PendingBubble(it, onDismiss = { thread.dismiss(it.id) }, onResend = { thread.resend(it.id) }) }
         items(rows, key = { it.key }) { item ->
             when (item) {
                 is ThreadItem.UserText -> UserBubble(item.text)
@@ -212,7 +183,11 @@ private fun UserBubble(text: String) {
             shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
         ) {
             SelectionContainer {
-                Text(text, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 21.sp),
+                )
             }
         }
     }
@@ -222,14 +197,19 @@ private fun UserBubble(text: String) {
 private fun PendingBubble(
     out: Outgoing,
     onDismiss: () -> Unit,
+    onResend: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(start = 56.dp, end = 12.dp, top = 10.dp), horizontalAlignment = Alignment.End) {
         Surface(
             color = MaterialTheme.colorScheme.primaryContainer,
             shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
-            modifier = Modifier.alpha(if (out.state == Outgoing.State.FAILED) 1f else 0.6f),
+            modifier = Modifier.alpha(if (out.state == Outgoing.State.SENDING || out.state == Outgoing.State.SUBMITTED) 0.6f else 1f),
         ) {
-            Text(out.text, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), style = MaterialTheme.typography.bodyLarge)
+            Text(
+                out.text,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 21.sp),
+            )
         }
         when (out.state) {
             Outgoing.State.SENDING -> {
@@ -240,9 +220,13 @@ private fun PendingBubble(
                 Caption("Sent")
             }
 
-            Outgoing.State.FAILED -> {
+            Outgoing.State.UNCLEAR, Outgoing.State.FAILED -> {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Caption(out.error ?: "Not sent", color = MaterialTheme.colorScheme.error)
+                    Caption(
+                        if (out.state == Outgoing.State.UNCLEAR) "The agent has not picked this up" else out.error ?: "Not sent",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    TextButton(onClick = onResend) { Text("Resend") }
                     TextButton(onClick = onDismiss) { Text("Dismiss") }
                 }
             }
@@ -261,8 +245,41 @@ private fun Caption(
 @Composable
 private fun AssistantMessage(text: String) {
     SelectionContainer {
-        Markdown(text, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
+        Markdown(
+            text,
+            typography = chatTypography(),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp),
+        )
     }
+}
+
+/** Chat-sized Markdown. The library defaults headings to display styles (57sp and down). */
+@Composable
+private fun chatTypography(): MarkdownTypography {
+    val t = MaterialTheme.typography
+    val body = t.bodyLarge.copy(fontSize = 15.sp, lineHeight = 22.sp)
+    val heading = t.titleMedium.copy(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold)
+    return markdownTypography(
+        h1 = t.titleLarge.copy(fontSize = 19.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold),
+        h2 = heading.copy(fontSize = 17.sp),
+        h3 = heading,
+        h4 = heading.copy(fontSize = 15.sp),
+        h5 = heading.copy(fontSize = 15.sp),
+        h6 = heading.copy(fontSize = 15.sp),
+        text = body,
+        paragraph = body,
+        ordered = body,
+        bullet = body,
+        list = body,
+        code = t.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = 12.5.sp, lineHeight = 18.sp),
+        inlineCode = body.copy(fontFamily = FontFamily.Monospace, fontSize = 13.5.sp),
+        quote = body.copy(fontStyle = FontStyle.Italic, color = MaterialTheme.colorScheme.onSurfaceVariant),
+        table = body.copy(fontSize = 13.sp),
+        textLink =
+            TextLinkStyles(
+                style = SpanStyle(color = MaterialTheme.colorScheme.primary, textDecoration = TextDecoration.Underline),
+            ),
+    )
 }
 
 @Composable
@@ -445,6 +462,7 @@ private fun BlockedCard(
     }
 }
 
+/** A floating pill above the conversation, like modern chat apps. */
 @Composable
 private fun Composer(
     working: Boolean,
@@ -453,30 +471,39 @@ private fun Composer(
     onStop: () -> Unit,
 ) {
     var text by rememberSaveable { mutableStateOf("") }
-    Surface(tonalElevation = 2.dp) {
-        Row(
-            Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 8.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shadowElevation = 6.dp,
+        modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 10.dp),
+    ) {
+        Row(Modifier.padding(start = 6.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.Bottom) {
             TextField(
                 value = text,
                 onValueChange = { text = it },
                 enabled = enabled,
-                placeholder = { Text(if (working) "Queue a message…" else "Message") },
+                placeholder = {
+                    Text(
+                        if (working) "Queue a message…" else "Message",
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
+                    )
+                },
+                textStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 21.sp),
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp, max = 180.dp),
-                shape = RoundedCornerShape(24.dp),
                 colors =
                     TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
                         focusedIndicatorColor = Color.Transparent,
                         unfocusedIndicatorColor = Color.Transparent,
                         disabledIndicatorColor = Color.Transparent,
                     ),
             )
-            Spacer(Modifier.width(6.dp))
             if (working && text.isBlank()) {
                 FilledIconButton(
                     onClick = onStop,
-                    modifier = Modifier.size(48.dp),
+                    modifier = Modifier.padding(bottom = 2.dp).size(44.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
                 ) { Icon(Icons.Filled.Stop, "Stop", tint = MaterialTheme.colorScheme.onSecondaryContainer) }
             } else {
@@ -486,8 +513,8 @@ private fun Composer(
                         text = ""
                     },
                     enabled = enabled && text.isNotBlank(),
-                    modifier = Modifier.size(48.dp),
-                ) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
+                    modifier = Modifier.padding(bottom = 2.dp).size(44.dp),
+                ) { Icon(Icons.AutoMirrored.Filled.Send, "Send", Modifier.size(20.dp)) }
             }
         }
     }

@@ -12,5 +12,6 @@ class HerdroidApp : Application() {
         super.onCreate()
         SshKeys.installProvider()
         connection = Connection(this)
+        connection.autoConnect()
     }
 }

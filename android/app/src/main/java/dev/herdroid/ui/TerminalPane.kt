@@ -8,16 +8,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -25,9 +23,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.termux.view.TerminalView
@@ -48,12 +46,10 @@ private val extraKeys =
         "enter" to "\r",
     )
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TerminalScreen(
+fun TerminalPane(
     connected: ConnectionState.Connected,
     pane: Pane,
-    onBack: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -64,7 +60,7 @@ fun TerminalScreen(
     val viewRef = remember { arrayOfNulls<TerminalView>(1) }
     val viewClient = remember { ViewClient(onTap = { viewRef[0]?.let { showKeyboard(context, it) } }) }
     val terminal =
-        remember(pane.id) {
+        remember(pane.id, connected) {
             RemoteTerminal(
                 scope,
                 connected.transport,
@@ -76,57 +72,59 @@ fun TerminalScreen(
         }
     DisposableEffect(terminal) { onDispose { terminal.close() } }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(pane.title ?: pane.id, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
-                actions = {
-                    FilterChip(
-                        selected = control,
-                        onClick = {
-                            if (control) {
-                                control = false
-                                terminal.setControl(false)
-                            } else {
-                                confirmControl = true
-                            }
-                        },
-                        label = { Text(if (control) "Controlling" else "Observing") },
-                    )
-                },
+    Column(Modifier.fillMaxSize().imePadding()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                closedReason ?: if (control) "Typing goes to the pane" else "Watching. Take control to type.",
+                style = MaterialTheme.typography.labelMedium,
+                color = if (closedReason != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
             )
-        },
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
-            closedReason?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp)) }
-            AndroidView(
-                factory = { ctx ->
-                    TerminalView(ctx, null).apply {
-                        setTerminalViewClient(viewClient)
-                        setTextSize((12 * ctx.resources.displayMetrics.scaledDensity).toInt())
-                        isFocusable = true
-                        isFocusableInTouchMode = true
-                        attachSession(terminal.session)
-                        viewRef[0] = this
+            FilterChip(
+                selected = control,
+                onClick = {
+                    if (control) {
+                        control = false
+                        terminal.setControl(false)
+                    } else {
+                        confirmControl = true
                     }
                 },
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                label = { Text(if (control) "Controlling" else "Take control") },
             )
-            if (control) {
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(4.dp)) {
-                    FilterChip(
-                        selected = ctrl,
-                        onClick = {
-                            ctrl = !ctrl
-                            viewClient.ctrlLatched = ctrl
-                        },
-                        label = { Text("ctrl") },
-                        modifier = Modifier.padding(horizontal = 2.dp),
-                    )
-                    for ((label, seq) in extraKeys) {
-                        TextButton(onClick = { terminal.sendText(seq) }) { Text(label) }
-                    }
+        }
+        AndroidView(
+            factory = { ctx ->
+                TerminalView(ctx, null).apply {
+                    setTerminalViewClient(viewClient)
+                    setTextSize((11 * ctx.resources.displayMetrics.scaledDensity).toInt())
+                    isFocusable = true
+                    isFocusableInTouchMode = true
+                    attachSession(terminal.session)
+                    viewRef[0] = this
+                }
+            },
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        )
+        if (control) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .navigationBarsPadding()
+                    .padding(4.dp),
+            ) {
+                FilterChip(
+                    selected = ctrl,
+                    onClick = {
+                        ctrl = !ctrl
+                        viewClient.ctrlLatched = ctrl
+                    },
+                    label = { Text("ctrl") },
+                    modifier = Modifier.padding(horizontal = 2.dp),
+                )
+                for ((label, seq) in extraKeys) {
+                    TextButton(onClick = { terminal.sendText(seq) }) { Text(label) }
                 }
             }
         }
