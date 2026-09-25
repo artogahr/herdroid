@@ -43,7 +43,7 @@ fun Sidebar(
                 Text("Herdroid", style = MaterialTheme.typography.titleLarge)
                 Text(host, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            TextButton(onClick = onDisconnect) { Text("Disconnect") }
+            TextButton(onClick = onDisconnect) { Text("Switch server") }
         }
         val workspaces = snapshot?.workspaces?.sortedBy { it.number }.orEmpty()
         val agents =

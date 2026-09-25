@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +47,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.herdroid.core.herdr.AgentStatus
@@ -101,7 +103,15 @@ fun MainScreen(
     val selected = snapshot?.let { snap -> snap.panes.firstOrNull { it.id == selectedId } ?: defaultPane(snap) }
     val pages = selected?.let { snapshot.swipeOrder(it.workspaceId) }.orEmpty()
     val latestPages by rememberUpdatedState(pages)
-    val pager = rememberPagerState(pageCount = { latestPages.size })
+    // One pager per space. Scrolling one pager across different page sets crashed Compose
+    // ("LayoutCoordinate operations are only valid when isAttached") when focus moved back
+    // from the drawer mid-change.
+    val workspaceId = selected?.workspaceId
+    val pager =
+        remember(workspaceId) {
+            PagerState(currentPage = pages.indexOfFirst { it.id == selected?.id }.coerceAtLeast(0)) { latestPages.size }
+        }
+    val focus = LocalFocusManager.current
 
     // Opening a pane from the side panel scrolls the pager to it.
     LaunchedEffect(selected?.id, pages.size) {
@@ -134,10 +144,11 @@ fun MainScreen(
         drawerContent = {
             ModalDrawerSheet {
                 Sidebar(
-                    host = connection.config.host,
+                    host = connection.config.label,
                     snapshot = snapshot,
                     currentPane = current,
                     onOpenWorkspace = { ws ->
+                        focus.clearFocus(force = true)
                         val target =
                             snapshot?.panes?.firstOrNull { it.tabId == ws.activeTabId && it.agent != null }
                                 ?: snapshot?.panes?.firstOrNull { it.tabId == ws.activeTabId }
@@ -146,6 +157,7 @@ fun MainScreen(
                         scope.launch { drawer.close() }
                     },
                     onOpenPane = { pane ->
+                        focus.clearFocus(force = true)
                         selectedId = pane.id
                         scope.launch { drawer.close() }
                     },
@@ -158,7 +170,10 @@ fun MainScreen(
             topBar = {
                 TopAppBar(
                     navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawer.open() } }) { Icon(Icons.Filled.Menu, "Spaces and agents") }
+                        IconButton(onClick = {
+                            focus.clearFocus(force = true)
+                            scope.launch { drawer.open() }
+                        }) { Icon(Icons.Filled.Menu, "Spaces and agents") }
                     },
                     title = { current?.let { PaneTitle(it, snapshot, threads[it.id]?.title) } },
                     actions = {
@@ -189,23 +204,25 @@ fun MainScreen(
                     }
 
                     else -> {
-                        HorizontalPager(
-                            state = pager,
-                            // The list can shrink under the pager when a pane closes mid-swipe.
-                            key = { latestPages.getOrNull(it)?.id ?: "gone-$it" },
-                            modifier = Modifier.fillMaxSize(),
-                        ) { page ->
-                            val pane = latestPages.getOrNull(page) ?: return@HorizontalPager
-                            if (terminalMode[pane.id] == true || !pane.hasChat) {
-                                // The terminal is an Android View; the pager crashes placing one
-                                // that scrolls in or out, so only the settled page gets a live one.
-                                if (page == pager.settledPage && !pager.isScrollInProgress) {
-                                    TerminalPane(connected, pane)
+                        key(workspaceId) {
+                            HorizontalPager(
+                                state = pager,
+                                // The list can shrink under the pager when a pane closes mid-swipe.
+                                key = { latestPages.getOrNull(it)?.id ?: "gone-$it" },
+                                modifier = Modifier.fillMaxSize(),
+                            ) { page ->
+                                val pane = latestPages.getOrNull(page) ?: return@HorizontalPager
+                                if (terminalMode[pane.id] == true || !pane.hasChat) {
+                                    // The terminal is an Android View; the pager crashes placing one
+                                    // that scrolls in or out, so only the settled page gets a live one.
+                                    if (page == pager.settledPage && !pager.isScrollInProgress) {
+                                        TerminalPane(connected, pane)
+                                    } else {
+                                        TerminalPlaceholder(pane)
+                                    }
                                 } else {
-                                    TerminalPlaceholder(pane)
+                                    ThreadPane(threadFor(pane), onOpenTerminal = { terminalMode[pane.id] = true })
                                 }
-                            } else {
-                                ThreadPane(threadFor(pane), onOpenTerminal = { terminalMode[pane.id] = true })
                             }
                         }
                     }

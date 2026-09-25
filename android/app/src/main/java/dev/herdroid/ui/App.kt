@@ -12,7 +12,7 @@ fun App(connection: Connection) {
     val state by connection.state.collectAsState()
     val session = state.session
     if (session == null) {
-        ConnectScreen(connection, state)
+        ServersScreen(connection, state)
     } else {
         MainScreen(connection, session, state as? ConnectionState.Reconnecting)
     }
