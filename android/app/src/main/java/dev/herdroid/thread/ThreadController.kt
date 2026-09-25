@@ -84,6 +84,12 @@ class ThreadController(
     private var parser: TranscriptParser? = null
     private var offset = -1L
 
+    /** Byte offset of the oldest loaded line; older history is read on demand. */
+    private var historyStart = -1L
+    var hasOlder by mutableStateOf(false)
+        private set
+    private var loadingOlder = false
+
     /**
      * Streams live only while on screen. Parsed messages, the file offset and the scroll
      * position stay, so coming back resumes from where it stopped instead of reloading.
@@ -185,6 +191,7 @@ class ThreadController(
         loadError = null
         val parser = parser ?: TranscriptSource.parserFor(kind).also { parser = it }
         var dirty = false
+        var lineBytes: Long? = null
         coroutineScope {
             // Rebuild the item list at most every 100 ms while a large backlog streams in.
             val ticker =
@@ -196,16 +203,23 @@ class ThreadController(
                             items = ThreadItems.build(messages)
                             loading = false
                             reconcileOutgoing()
+                            hasOlder = historyStart > 0
+                            if (hasOlder && items.count { it !is ThreadItem.Activity } < MIN_TEXT_ITEMS) launch { loadOlder() }
                         }
                     }
                 }
             val lines =
-                if (offset < 0) connected.transcripts.followRecent(file) else connected.transcripts.follow(file, offset)
+                if (offset < 0) connected.transcripts.followRecent(file, WINDOW) else connected.transcripts.follow(file, offset)
             runCatching {
                 lines
-                    .map { line -> line.endOffset to parser.feed(line.text) }
-                    .flowOn(Dispatchers.Default)
+                    .map { line ->
+                        lineBytes = line.text.encodeToByteArray().size + 1L
+                        line.endOffset to parser.feed(line.text).map(::trim)
+                    }.flowOn(Dispatchers.Default)
                     .collect { (end, parsed) ->
+                        if (historyStart < 0) {
+                            historyStart = end - (lineBytes ?: 0)
+                        }
                         offset = end
                         for (m in parsed) {
                             val at = index[m.id]
@@ -222,6 +236,43 @@ class ThreadController(
             }.onFailure { if (it !is kotlinx.coroutines.CancellationException) loadError = "Connection lost: ${it.message}" }
             ticker.cancel()
         }
+    }
+
+    /** Prepends the chunk of transcript before what is loaded. Called when scrolling up. */
+    suspend fun loadOlder() {
+        val file = path ?: return
+        val kind = kind ?: return
+        if (loadingOlder || historyStart <= 0) return
+        loadingOlder = true
+        try {
+            val (lines, start) = connected.transcripts.readBefore(file, historyStart, WINDOW * 2)
+            val older =
+                kotlinx.coroutines.withContext(Dispatchers.Default) {
+                    // A fresh parser: tool results whose call is further back stay unmatched.
+                    val p = TranscriptSource.parserFor(kind)
+                    val byId = LinkedHashMap<String, Message>()
+                    lines.forEach { line -> p.feed(line).forEach { byId[it.id] = trim(it) } }
+                    byId.values.filter { it.id !in index }
+                }
+            historyStart = start
+            messages.addAll(0, older)
+            index.clear()
+            messages.forEachIndexed { i, m -> index[m.id] = i }
+            items = ThreadItems.build(messages)
+            hasOlder = historyStart > 0
+            if (hasOlder && items.count { it !is ThreadItem.Activity } < MIN_TEXT_ITEMS) loadingOlder = false.also { loadOlder() }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+        } finally {
+            loadingOlder = false
+        }
+    }
+
+    /** Tool output can be megabytes (base64 screenshots); the chat never shows more than this. */
+    private fun trim(m: Message): Message {
+        val tool = m.tool ?: return m
+        val out = tool.output ?: return m
+        return if (out.length <= MAX_TOOL_OUTPUT) m else m.copy(tool = tool.copy(output = out.take(MAX_TOOL_OUTPUT) + "\n…"))
     }
 
     /** herdr learns a new agent's session from its hooks, usually at the first prompt. */
@@ -321,6 +372,10 @@ class ThreadController(
     private fun parseStatus(s: String) = AgentStatus.entries.firstOrNull { it.name.equals(s, ignoreCase = true) }
 
     companion object {
+        private const val WINDOW = 512L * 1024
+        private const val MIN_TEXT_ITEMS = 12
+        private const val MAX_TOOL_OUTPUT = 16_000
+
         /** The bottom of the screen, where agents draw their question and choices. */
         fun promptTail(screen: String): String =
             screen

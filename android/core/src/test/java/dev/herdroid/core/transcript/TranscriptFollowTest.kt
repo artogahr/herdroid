@@ -51,4 +51,21 @@ class TranscriptFollowTest {
     fun claudeProjectDirMatchesClaudeCode() {
         assertEquals("-Users-a-b-c-d", TranscriptSource.claudeProjectDir("/Users/a/b.c/d"))
     }
+
+    @Test
+    fun readsOlderChunksBackToTheStart() =
+        runBlocking {
+            val lines = (1..300).map { "line-$it-ü€-" + "x".repeat(40) }
+            val file = File.createTempFile("older", ".jsonl").apply { writeText(lines.joinToString("\n") + "\n") }
+            var end = file.length()
+            val collected = ArrayList<String>()
+            while (end > 0) {
+                val (chunk, start) = source.readBefore(file.path, end, maxBytes = 997)
+                assertEquals(true, start < end)
+                collected.addAll(0, chunk)
+                end = start
+            }
+            // Chunks that start mid-character still line up exactly with no gaps or repeats.
+            assertEquals(lines, collected)
+        }
 }
