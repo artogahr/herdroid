@@ -27,10 +27,11 @@ class PinchToScaleTest {
     val compose = createComposeRule()
 
     private var scale by mutableFloatStateOf(1f)
+    private var previews = 0
 
     private fun content() =
         compose.setContent {
-            Box(Modifier.size(360.dp).testTag("chat").pinchToScale({ scale }, { scale = it }))
+            Box(Modifier.size(360.dp).testTag("chat").pinchToScale({ scale }, { _, _ -> previews++ }, { scale = it }))
         }
 
     @Test
@@ -41,6 +42,8 @@ class PinchToScaleTest {
         }
         compose.waitForIdle()
         assertTrue("scale $scale", scale > 1.3f)
+        // Fingers moving only preview; the scale itself is set once, on release.
+        assertTrue("previews $previews", previews > 1)
     }
 
     @Test
