@@ -65,7 +65,7 @@ val ConnectionState.session: ConnectionState.Connected?
         }
 
 class Connection(
-    context: Context,
+    val context: Context,
 ) {
     private val prefs = context.getSharedPreferences("connection", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -135,8 +135,58 @@ class Connection(
             _state.value = ConnectionState.Connecting
             _state.value = open().toState()
         }
+        (_state.value as? ConnectionState.Connected)?.let { learnTailnet(it) }
         startWatchdog()
     }
+
+    /**
+     * Tailnet devices, as the last connected server's `tailscale status` listed them. An app
+     * cannot list the tailnet itself, so server discovery uses this.
+     */
+    val tailnetPeers: List<TailnetPeer>
+        get() =
+            runCatching {
+                val array = org.json.JSONArray(prefs.getString("tailnetPeers", "[]"))
+                (0 until array.length()).map { i ->
+                    array.getJSONObject(i).let { TailnetPeer(it.getString("name"), it.getString("ip")) }
+                }
+            }.getOrDefault(emptyList())
+
+    private fun learnTailnet(connected: ConnectionState.Connected) {
+        scope.launch {
+            val out =
+                runCatching { connected.transport.run("\"\${SHELL:-/bin/sh}\" -lc 'tailscale status --json' 2>/dev/null") }
+                    .getOrNull() ?: return@launch
+            val peers = parseTailnet(out)
+            if (peers.isEmpty()) return@launch
+            val array = org.json.JSONArray()
+            peers.forEach {
+                array.put(
+                    org.json
+                        .JSONObject()
+                        .put("name", it.name)
+                        .put("ip", it.ip),
+                )
+            }
+            prefs.edit { putString("tailnetPeers", array.toString()) }
+        }
+    }
+
+    /** Online devices (and the server itself) with their first Tailscale IPv4 address. */
+    private fun parseTailnet(json: String): List<TailnetPeer> =
+        runCatching {
+            val root = org.json.JSONObject(json)
+            val nodes = ArrayList<org.json.JSONObject>()
+            root.optJSONObject("Self")?.let { nodes += it }
+            root.optJSONObject("Peer")?.let { peers -> peers.keys().forEach { nodes += peers.getJSONObject(it) } }
+            nodes
+                .filter { it.optBoolean("Online", true) }
+                .mapNotNull { node ->
+                    val ips = node.optJSONArray("TailscaleIPs") ?: return@mapNotNull null
+                    val ip = (0 until ips.length()).map { ips.getString(it) }.firstOrNull { '.' in it } ?: return@mapNotNull null
+                    TailnetPeer(node.optString("HostName").ifBlank { ip }, ip)
+                }
+        }.getOrDefault(emptyList())
 
     /**
      * Starts connecting in this object's scope. UI scopes must not own the attempt: the
