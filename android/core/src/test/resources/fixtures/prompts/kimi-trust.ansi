@@ -1,0 +1,31 @@
+ [0m[38;2;90;90;90m│[0m >                                                                                             [0m[38;2;90;90;90m│[0m
+ [0m[38;2;90;90;90m╰───────────────────────────────────────────────────────────────────────────────────────────────╯[0m
+ [0m[38;2;224;224;224mK3-256k thinking: max[0m  [0m[38;2;136;136;136m/tmp/lab[0m
+                                                                         [0m[38;2;224;224;224mcontext: 13% (31.9k/256k)[0m
+
+[0m[38;5;4m/tmp/lab [0m[38;5;3m5m 35s[0m
+[0m[38;5;5m❯[0m cd [0m[4m[38;5;6m/tmp/lab[0m
+[0m[4m[38;5;6m0/scratchpad/prompt-lab/untrusted2[0m [0m[38;5;14m&&[0m kimi
+A newer version of @moonshot-ai/kimi-code is available (2.0.2 -> 2.1.1).
+Detected install source: homebrew
+To update manually, run: brew upgrade kimi-code
+
+Note: Third-party sources may lag behind the official release.
+For the latest updates, use the official installer: https://www.kimi.com/code
+ [0m[38;2;79;168;255m─────────────────────────────────────────────────────────────────────────────────────────────────[0m
+ [0m[1m[38;2;79;168;255m Trust this folder?[0m
+ [0m[38;2;107;107;107m ↑↓ navigate · Enter select · Esc exit[0m
+ 
+  [0m[38;2;245;245;245m/tmp/lab[0m
+  [0m[38;2;245;245;245m/scratchpad/prompt-lab/untrusted2[0m
+ 
+  [0m[38;2;107;107;107mProject-level MCP servers are disabled until you explicitly choose Trust. Trust starts the[0m
+  [0m[38;2;107;107;107mlisted project MCP targets and remembers this folder.[0m
+ 
+ [0m[38;2;79;168;255m  ❯ [0m[1m[38;2;79;168;255mTrust this folder[0m
+     [0m[38;2;107;107;107mEnable project MCP servers. Remembered for this folder.[0m
+ 
+ [0m[38;2;136;136;136m    [0m[38;2;224;224;224mDon't trust[0m
+     [0m[38;2;107;107;107mExit Kimi Code. Asked again next launch.[0m
+ 
+ [0m[38;2;79;168;255m─────────────────────────────────────────────────────────────────────────────────────────────────[0m
