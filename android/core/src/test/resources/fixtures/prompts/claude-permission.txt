@@ -1,0 +1,19 @@
+⏺ Bash(cd /tmp/lab/repo && git push origin HEAD:main)
+  ⎿  Running…
+
+───────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   cd /tmp/lab/repo && git push origin HEAD:main
+   Push the branch to origin
+
+ This command changes directory before running a version-control command.
+
+ Permission rule Bash(git push *) overrides auto mode for this command
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No, and let auto mode decide
+   3. No, and tell Claude what to do differently (esc)
+
+ Esc to cancel · Tab to amend · ctrl+e to explain

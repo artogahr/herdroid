@@ -1,0 +1,30 @@
+
+❯ Run this exact bash command with the Bash tool: echo claude-test > out2.txt
+
+  Ran 1 shell command
+
+⏺ I ran the command. It printed nothing, so claude-test is now in out2.txt in the prompt-lab
+  directory. I didn't open the file to check its contents.
+
+✻ Sautéed for 7s · done 10:42 PM
+
+❯ Use the AskUserQuestion tool to ask me one question: which color I prefer, with options Red,
+  Green and Blue, each with a one-line description.
+
+⏺ I can't ask this through AskUserQuestion. The tool isn't available in this session, and a tool
+  search found nothing by that name. Here's the question as plain text instead:
+
+  Which color do you prefer?
+
+  1. Red: warm and bold, the color of energy and urgency.
+  2. Green: calm and natural, linked with growth and balance.
+  3. Blue: cool and steady, the color of trust and focus.
+
+  Reply with a number or a color name.
+
+✻ Baked for 6s · done 10:42 PM
+
+───────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+───────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent

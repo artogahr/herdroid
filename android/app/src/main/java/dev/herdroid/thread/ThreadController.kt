@@ -13,6 +13,9 @@ import dev.herdroid.core.model.AgentKind
 import dev.herdroid.core.model.Message
 import dev.herdroid.core.model.MessageKind
 import dev.herdroid.core.model.Role
+import dev.herdroid.core.prompt.AnsiScreen
+import dev.herdroid.core.prompt.Prompt
+import dev.herdroid.core.prompt.PromptParser
 import dev.herdroid.core.thread.Outbox
 import dev.herdroid.core.thread.Outgoing
 import dev.herdroid.core.thread.ThreadItem
@@ -60,7 +63,17 @@ class ThreadController(
         private set
     var status by mutableStateOf(pane.agentStatus ?: AgentStatus.UNKNOWN)
         private set
+
+    /** The question the agent is showing, parsed from its screen. */
+    var prompt by mutableStateOf<Prompt?>(null)
+        private set
+
+    /** The raw bottom of the screen while blocked, for prompts the parser does not understand. */
     var blockedPrompt by mutableStateOf<String?>(null)
+        private set
+    var answering by mutableStateOf(false)
+        private set
+    var answerError by mutableStateOf<String?>(null)
         private set
     var loadError by mutableStateOf<String?>(null)
         private set
@@ -109,6 +122,7 @@ class ThreadController(
             scope.launch {
                 launch { followTranscript() }
                 launch { followStatus() }
+                launch { watchPrompts() }
             }
     }
 
@@ -371,10 +385,34 @@ class ThreadController(
 
     private suspend fun onStatus(s: AgentStatus) {
         status = s
-        blockedPrompt = if (s == AgentStatus.BLOCKED) readPrompt() else null
+        refreshPrompt()
     }
 
-    private suspend fun readPrompt(): String? =
+    /**
+     * herdr misses some prompts (Codex's folder trust reads as idle), so while on screen and
+     * not working, look at the screen every few seconds too.
+     */
+    private suspend fun watchPrompts() {
+        while (true) {
+            delay(3_000)
+            if (status != AgentStatus.WORKING && !answering) refreshPrompt()
+        }
+    }
+
+    private suspend fun refreshPrompt() {
+        val screen = readScreen()
+        val parsed = screen?.let { PromptParser.parse(AnsiScreen.parse(it)) }
+        // Without a key hint, a parsed list is only trusted while herdr says blocked.
+        prompt = parsed?.takeIf { status == AgentStatus.BLOCKED || it.hint != null }
+        blockedPrompt =
+            if (status == AgentStatus.BLOCKED) {
+                screen?.let { promptTail(AnsiScreen.parse(it).joinToString("\n") { l -> l.text }) }
+            } else {
+                null
+            }
+    }
+
+    private suspend fun readScreen(): String? =
         runCatching {
             api
                 .request(
@@ -382,13 +420,119 @@ class ThreadController(
                     buildJsonObject {
                         put("pane_id", pane.id)
                         put("source", "visible")
-                        put("format", "text")
+                        put("format", "ansi")
                     },
                 ).getValue("read")
                 .jsonObject["text"]
                 ?.jsonPrimitive
                 ?.content
-        }.getOrNull()?.let { promptTail(it) }
+        }.getOrNull()
+
+    /**
+     * Picks option [index] of [shown], typing [text] when the option asks for it. Re-reads the
+     * screen before every key so an answer never lands on a different question: if the
+     * prompt changed, nothing is sent.
+     */
+    fun answer(
+        shown: Prompt,
+        index: Int,
+        text: String? = null,
+    ) {
+        if (answering) return
+        answering = true
+        answerError = null
+        scope.launch {
+            try {
+                val now = currentPrompt()
+                if (now == null || now.signature != shown.signature) {
+                    answerError = "The question changed. Check it again."
+                    return@launch
+                }
+                val delta = index - now.selected.coerceAtLeast(0)
+                if (delta != 0) keys(List(kotlin.math.abs(delta)) { if (delta > 0) "down" else "up" })
+                delay(250)
+                val moved = currentPrompt()
+                if (moved == null || moved.signature != shown.signature || moved.selected != index) {
+                    answerError = "Could not select that option. Try again or use the terminal."
+                    return@launch
+                }
+                val option = shown.options[index]
+                if (option.wantsText && !text.isNullOrBlank()) {
+                    if (!moved.textEntry) {
+                        keys(listOf("enter"))
+                        delay(400)
+                    }
+                    typeAndSubmit(text)
+                } else {
+                    keys(listOf("enter"))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                answerError = e.message ?: "Could not answer"
+            } finally {
+                delay(500)
+                answering = false
+                refreshPrompt()
+            }
+        }
+    }
+
+    /** For a prompt that is waiting for typed text. */
+    fun answerText(text: String) {
+        if (answering || text.isBlank()) return
+        answering = true
+        answerError = null
+        scope.launch {
+            try {
+                if (currentPrompt()?.textEntry != true) {
+                    answerError = "The agent is no longer waiting for text."
+                    return@launch
+                }
+                typeAndSubmit(text)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                answerError = e.message ?: "Could not answer"
+            } finally {
+                delay(500)
+                answering = false
+                refreshPrompt()
+            }
+        }
+    }
+
+    fun cancelPrompt() {
+        scope.launch {
+            runCatching { keys(listOf("esc")) }
+            delay(500)
+            refreshPrompt()
+        }
+    }
+
+    private suspend fun currentPrompt(): Prompt? = readScreen()?.let { PromptParser.parse(AnsiScreen.parse(it)) }
+
+    private suspend fun typeAndSubmit(text: String) {
+        api.request(
+            "pane.send_text",
+            buildJsonObject {
+                put("pane_id", pane.id)
+                put("text", text)
+            },
+        )
+        delay(150)
+        keys(listOf("enter"))
+    }
+
+    private suspend fun keys(keys: List<String>) {
+        api.request(
+            "pane.send_keys",
+            buildJsonObject {
+                put("pane_id", pane.id)
+                put("keys", JsonArray(keys.map { JsonPrimitive(it) }))
+            },
+        )
+    }
 
     private suspend fun rebuild() {
         val snapshot = messages.toList()

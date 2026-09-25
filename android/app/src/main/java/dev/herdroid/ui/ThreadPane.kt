@@ -26,10 +26,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -70,13 +75,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -88,12 +98,15 @@ import dev.herdroid.core.herdr.AgentStatus
 import dev.herdroid.core.herdr.Pane
 import dev.herdroid.core.model.Message
 import dev.herdroid.core.model.MessageKind
+import dev.herdroid.core.prompt.Prompt
+import dev.herdroid.core.prompt.PromptOption
 import dev.herdroid.core.thread.Outgoing
 import dev.herdroid.core.thread.ThreadItem
 import dev.herdroid.core.thread.ToolSummary
 import dev.herdroid.core.thread.ToolVerb
 import dev.herdroid.data.ConnectionState
 import dev.herdroid.thread.ThreadController
+import kotlinx.coroutines.delay
 
 /** One agent conversation: messages, tool activity, and a floating composer. */
 @Composable
@@ -131,8 +144,13 @@ fun ThreadPane(
                     )
                 }
             }
-            AnimatedVisibility(thread.status == AgentStatus.BLOCKED) {
-                BlockedCard(thread.blockedPrompt, onOpenTerminal)
+            val prompt = thread.prompt
+            AnimatedVisibility(prompt != null || thread.status == AgentStatus.BLOCKED) {
+                if (prompt != null) {
+                    PromptCard(thread, prompt, onOpenTerminal)
+                } else {
+                    BlockedCard(thread.blockedPrompt, onOpenTerminal)
+                }
             }
             Composer(
                 working = thread.status == AgentStatus.WORKING,
@@ -528,5 +546,153 @@ private fun Composer(
                 ) { Icon(Icons.AutoMirrored.Filled.Send, "Send", Modifier.size(20.dp)) }
             }
         }
+    }
+}
+
+/** A native answer card for the question the agent shows in its terminal. */
+@Composable
+private fun PromptCard(
+    thread: ThreadController,
+    prompt: Prompt,
+    onOpenTerminal: () -> Unit,
+) {
+    var typing by remember(prompt.signature) { mutableStateOf<Int?>(if (prompt.textEntry && prompt.options.isEmpty()) -1 else null) }
+    var text by remember(prompt.signature) { mutableStateOf("") }
+    // A new question needs the whole card: put away the keyboard left over from the composer.
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(prompt.signature) {
+        focus.clearFocus(force = true)
+        keyboard?.hide()
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 4.dp,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Column(
+            Modifier.padding(16.dp).heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AgentAvatar(thread.pane.agent, size = 24.dp)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "${thread.pane.agent?.replaceFirstChar { it.uppercase() } ?: "The agent"} is asking",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (prompt.question.isNotBlank()) QuestionText(prompt.question)
+            prompt.options.forEachIndexed { i, option ->
+                OptionButton(
+                    option = option,
+                    highlighted = i == prompt.selected,
+                    enabled = !thread.answering,
+                    onClick = {
+                        if (option.wantsText) typing = if (typing == i) null else i else thread.answer(prompt, i)
+                    },
+                )
+                if (typing == i) {
+                    AnswerField(text, { text = it }, enabled = !thread.answering) { thread.answer(prompt, i, text) }
+                }
+            }
+            if (typing == -1) {
+                AnswerField(text, { text = it }, enabled = !thread.answering) { thread.answerText(text) }
+            }
+            thread.answerError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (thread.answering) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onOpenTerminal) { Text("Terminal") }
+                TextButton(onClick = thread::cancelPrompt, enabled = !thread.answering) { Text("Cancel") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuestionText(question: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        question.lines().filter { it.isNotBlank() }.forEach { line ->
+            // Commands and paths read better in monospace; prose stays in the body font.
+            val code = line.startsWith("$") || line.startsWith("cd ") || line.contains(" && ") || line.startsWith("/")
+            if (code) {
+                Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = RoundedCornerShape(8.dp)) {
+                    Text(
+                        line,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.5.sp,
+                        lineHeight = 17.sp,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
+            } else {
+                Text(line, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp, lineHeight = 21.sp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun OptionButton(
+    option: PromptOption,
+    highlighted: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val container = if (highlighted) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest
+    Surface(
+        color = container,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(enabled = enabled, onClick = onClick),
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+            Text(
+                option.label.removeSuffix("(esc)").trim(),
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
+                color = if (highlighted) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+            )
+            option.description?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnswerField(
+    text: String,
+    onText: (String) -> Unit,
+    enabled: Boolean,
+    onSend: () -> Unit,
+) {
+    val requester = remember { FocusRequester() }
+    val bring = remember { BringIntoViewRequester() }
+    LaunchedEffect(Unit) {
+        requester.requestFocus()
+        delay(300)
+        bring.bringIntoView()
+    }
+    Row(Modifier.bringIntoViewRequester(bring), verticalAlignment = Alignment.CenterVertically) {
+        TextField(
+            value = text,
+            onValueChange = onText,
+            enabled = enabled,
+            placeholder = { Text("Your answer") },
+            shape = RoundedCornerShape(16.dp),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { if (text.isNotBlank()) onSend() }),
+            colors =
+                TextFieldDefaults.colors(
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent,
+                ),
+            modifier = Modifier.weight(1f).focusRequester(requester),
+        )
+        Spacer(Modifier.width(8.dp))
+        FilledIconButton(onClick = onSend, enabled = enabled && text.isNotBlank()) { Icon(Icons.AutoMirrored.Filled.Send, "Send answer") }
     }
 }
