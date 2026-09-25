@@ -18,10 +18,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +52,7 @@ private val extraKeys =
 fun TerminalPane(
     connected: ConnectionState.Connected,
     pane: Pane,
+    swiping: Boolean = false,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -59,10 +62,11 @@ fun TerminalPane(
     var confirmControl by remember { mutableStateOf(false) }
     var ctrl by remember { mutableStateOf(false) }
     val viewRef = remember { arrayOfNulls<TerminalView>(1) }
-    val viewClient = remember { ViewClient(onTap = { viewRef[0]?.let { showKeyboard(context, it) } }) }
+    // Typing only makes sense in control mode; an observing terminal never takes focus.
+    val controlState = rememberUpdatedState(control)
+    val viewClient = remember { ViewClient(onTap = { if (controlState.value) viewRef[0]?.let { showKeyboard(context, it) } }) }
     val terminal =
         remember(pane.id, connected, attempt) {
-            closedReason = null
             RemoteTerminal(
                 scope,
                 connected.transport,
@@ -72,7 +76,15 @@ fun TerminalPane(
                 onClosed = { closedReason = it },
             )
         }
-    DisposableEffect(terminal) { onDispose { terminal.close() } }
+    // Removing a focused Android view makes Android search for new focus, which re-enters
+    // Compose and re-lays out the pager mid-removal (the pager crash). Let go first.
+    LaunchedEffect(swiping) {
+        if (swiping) viewRef[0]?.let { dropFocus(context, it) }
+    }
+    DisposableEffect(terminal) {
+        closedReason = null
+        onDispose { terminal.close() }
+    }
 
     Column(Modifier.fillMaxSize().imePadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -103,14 +115,18 @@ fun TerminalPane(
                 TerminalView(ctx, null).apply {
                     setTerminalViewClient(viewClient)
                     setTextSize((11 * ctx.resources.displayMetrics.scaledDensity).toInt())
-                    isFocusable = true
-                    isFocusableInTouchMode = true
+                    isFocusable = false
+                    isFocusableInTouchMode = false
                     attachSession(terminal.session)
                     viewRef[0] = this
                 }
             },
             // A retry creates a new session; the view stays and is pointed at it.
-            update = { it.attachSession(terminal.session) },
+            update = { view ->
+                view.attachSession(terminal.session)
+                view.isFocusable = control
+                view.isFocusableInTouchMode = control
+            },
             modifier = Modifier.weight(1f).fillMaxWidth(),
         )
         if (control) {
@@ -152,6 +168,14 @@ fun TerminalPane(
             dismissButton = { TextButton(onClick = { confirmControl = false }) { Text("Cancel") } },
         )
     }
+}
+
+private fun dropFocus(
+    context: Context,
+    view: TerminalView,
+) {
+    (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(view.windowToken, 0)
+    view.clearFocus()
 }
 
 private fun showKeyboard(
