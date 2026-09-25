@@ -12,10 +12,27 @@ import org.junit.Test
 
 class ThreadItemsTest {
     private fun bash(id: String) =
-        Message(id, role = Role.ASSISTANT, kind = MessageKind.TOOL_CALL, tool = ToolInfo(id, "Bash", buildJsonObject { put("command", "ls") }))
+        Message(
+            id,
+            role = Role.ASSISTANT,
+            kind = MessageKind.TOOL_CALL,
+            tool = ToolInfo(id, "Bash", buildJsonObject { put("command", "ls") }),
+        )
 
     private fun read(id: String) =
-        Message(id, role = Role.ASSISTANT, kind = MessageKind.TOOL_CALL, tool = ToolInfo(id, "Read", buildJsonObject { put("file_path", "/a/b/Theme.kt") }))
+        Message(
+            id,
+            role = Role.ASSISTANT,
+            kind = MessageKind.TOOL_CALL,
+            tool =
+                ToolInfo(
+                    id,
+                    "Read",
+                    buildJsonObject {
+                        put("file_path", "/a/b/Theme.kt")
+                    },
+                ),
+        )
 
     @Test
     fun foldsToolRunsBetweenMessages() {

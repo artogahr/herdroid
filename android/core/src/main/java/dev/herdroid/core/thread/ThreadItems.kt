@@ -37,6 +37,7 @@ object ThreadItems {
     fun build(messages: List<Message>): List<ThreadItem> {
         val items = ArrayList<ThreadItem>()
         val run = ArrayList<Message>()
+
         fun flush() {
             if (run.isEmpty()) return
             items += ThreadItem.Activity("activity-" + run.first().id, run.toList())
@@ -62,7 +63,9 @@ object ThreadItems {
                     items += ThreadItem.AssistantText(m.id, text)
                 }
 
-                m.kind == MessageKind.TOOL_CALL || m.kind == MessageKind.THINKING || m.kind == MessageKind.TOOL_RESULT -> run += m
+                m.kind == MessageKind.TOOL_CALL || m.kind == MessageKind.THINKING || m.kind == MessageKind.TOOL_RESULT -> {
+                    run += m
+                }
 
                 m.kind == MessageKind.COMPACTION -> {
                     flush()
@@ -83,9 +86,20 @@ object ThreadItems {
 
     private fun noticeFor(text: String): String? =
         when {
-            text.startsWith("[Request interrupted") -> "Interrupted"
-            text.startsWith("<command-name>") ->
-                Regex("<command-name>(.*?)</command-name>").find(text)?.groupValues?.get(1)?.let { "Ran $it" }
-            else -> null
+            text.startsWith("[Request interrupted") -> {
+                "Interrupted"
+            }
+
+            text.startsWith("<command-name>") -> {
+                Regex("<command-name>(.*?)</command-name>")
+                    .find(text)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.let { "Ran $it" }
+            }
+
+            else -> {
+                null
+            }
         }
 }
