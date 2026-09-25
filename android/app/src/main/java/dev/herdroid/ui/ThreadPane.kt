@@ -66,6 +66,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -75,10 +76,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
@@ -89,6 +94,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
@@ -119,11 +125,30 @@ fun ThreadPane(
     Box(Modifier.fillMaxSize().imePadding()) {
         Column(Modifier.fillMaxSize()) {
             val prefs = uiPrefs()
+            var size by remember { mutableStateOf(IntSize.Zero) }
+            var zoom by remember { mutableFloatStateOf(1f) }
+            var zoomOrigin by remember { mutableStateOf(TransformOrigin.Center) }
             Box(
                 Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .pinchToScale({ prefs.chatTextScale }, prefs::updateChatTextScale),
+                    .clipToBounds()
+                    .pinchToScale(
+                        current = { prefs.chatTextScale },
+                        onPreview = { z, focus ->
+                            zoom = z
+                            if (size.width > 0 && size.height > 0) zoomOrigin = TransformOrigin(focus.x / size.width, focus.y / size.height)
+                        },
+                        onCommit = { scale ->
+                            prefs.updateChatTextScale(scale)
+                            zoom = 1f
+                        },
+                    ).onSizeChanged { size = it }
+                    .graphicsLayer {
+                        scaleX = zoom
+                        scaleY = zoom
+                        transformOrigin = zoomOrigin
+                    },
             ) {
                 ScaledText(prefs.chatTextScale) { Conversation(thread) }
                 if (thread.awaitingFirstMessage && thread.items.isEmpty() && thread.outgoing.isEmpty()) {
