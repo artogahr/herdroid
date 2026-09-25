@@ -6,8 +6,8 @@ import json
 import re
 import sys
 
-SAFE_ENUMS = {"type", "subtype", "role", "phase", "status", "stop_reason", "kind", "event"}
-SAFE_IDS = {"id", "uuid", "parentUuid", "tool_use_id", "call_id", "session_id", "turn_id"}
+SAFE_ENUMS = {"type", "subtype", "role", "phase", "status", "stop_reason", "kind", "event", "reason"}
+SAFE_IDS = {"id", "uuid", "parentUuid", "tool_use_id", "call_id", "session_id", "turn_id", "toolCallId", "promptId", "turnId", "stepUuid"}
 
 
 def scrub(value, key=None):

@@ -8,6 +8,11 @@ import dev.herdroid.ui.App
 import dev.herdroid.ui.theme.HerdroidTheme
 
 class MainActivity : ComponentActivity() {
+    override fun onStart() {
+        super.onStart()
+        (application as HerdroidApp).connection.onForeground()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

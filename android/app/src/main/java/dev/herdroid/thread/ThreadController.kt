@@ -37,7 +37,7 @@ data class Outgoing(
     val state: State,
     val error: String? = null,
 ) {
-    enum class State { SENDING, SUBMITTED, FAILED }
+    enum class State { SENDING, SUBMITTED, UNCLEAR, FAILED }
 }
 
 /**
@@ -66,7 +66,11 @@ class ThreadController(
     val outgoing = mutableStateListOf<Outgoing>()
 
     val kind: AgentKind? =
-        pane.agentSession?.agent?.let { a -> AgentKind.entries.firstOrNull { it.name.equals(a, ignoreCase = true) } }
+        (pane.agentSession?.agent ?: pane.agent)?.let { a -> AgentKind.entries.firstOrNull { it.name.equals(a, ignoreCase = true) } }
+
+    /** True while a new agent has no saved conversation yet; sending the first message creates it. */
+    var awaitingFirstMessage by mutableStateOf(false)
+        private set
 
     fun start() {
         scope.launch { followTranscript() }
@@ -95,7 +99,17 @@ class ThreadController(
                     onFailure = { e -> it.copy(state = Outgoing.State.FAILED, error = describe(e)) },
                 )
             }
+            // herdr confirms typing, not that the agent took the message. If the transcript
+            // never shows it, say so instead of claiming it was sent.
+            delay(20_000)
+            update(id) { if (it.state == Outgoing.State.SUBMITTED) it.copy(state = Outgoing.State.UNCLEAR) else it }
         }
+    }
+
+    fun resend(id: String) {
+        val out = outgoing.firstOrNull { it.id == id } ?: return
+        dismiss(id)
+        send(out.text)
     }
 
     fun dismiss(id: String) {
@@ -117,17 +131,22 @@ class ThreadController(
     }
 
     private suspend fun followTranscript() {
-        val session = pane.agentSession
         val kind = kind
-        if (session == null || kind == null) {
+        if (kind == null) {
             loading = false
             loadError = "No chat view for this agent yet. Open the terminal instead."
             return
         }
-        val path =
-            runCatching { connected.transcripts.locate(kind, session.value, pane.cwd) }
-                .onFailure { loadError = "Could not find the conversation: ${it.message}" }
-                .getOrNull()
+        val session = pane.agentSession ?: waitForSession()
+        var path: String? = null
+        for (attempt in 1..5) {
+            path =
+                runCatching { connected.transcripts.locate(kind, session.value, pane.cwd) }
+                    .onFailure { loadError = "Could not find the conversation: ${it.message}" }
+                    .getOrNull()
+            if (path != null) break
+            delay(1_500)
+        }
         if (path == null) {
             loading = false
             if (loadError == null) loadError = "This agent has no saved conversation yet."
@@ -166,6 +185,25 @@ class ThreadController(
                     if (!dirty) loading = false
                 }
         }.onFailure { loadError = "Connection lost: ${it.message}" }
+    }
+
+    /** herdr learns a new agent's session from its hooks, usually at the first prompt. */
+    private suspend fun waitForSession(): dev.herdroid.core.herdr.AgentSession {
+        loading = false
+        awaitingFirstMessage = true
+        while (true) {
+            val pane =
+                runCatching { api.request("pane.get", buildJsonObject { put("pane_id", pane.id) }) }
+                    .getOrNull()
+                    ?.get("pane")
+                    ?.let { HerdrApi.json.decodeFromJsonElement(Pane.serializer(), it) }
+            pane?.agentSession?.let {
+                awaitingFirstMessage = false
+                loading = true
+                return it
+            }
+            delay(2_000)
+        }
     }
 
     private suspend fun followStatus() {
@@ -225,7 +263,7 @@ class ThreadController(
                 .filter { it.role == Role.USER && it.kind == MessageKind.TEXT }
                 .mapNotNull { it.text?.trim() }
                 .toSet()
-        outgoing.removeAll { it.state == Outgoing.State.SUBMITTED && it.text in recentUser }
+        outgoing.removeAll { (it.state == Outgoing.State.SUBMITTED || it.state == Outgoing.State.UNCLEAR) && it.text in recentUser }
     }
 
     private fun update(

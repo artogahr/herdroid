@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
 @Serializable
-enum class AgentKind { CLAUDE, CODEX }
+enum class AgentKind { CLAUDE, CODEX, KIMI }
 
 @Serializable
 enum class Role { USER, ASSISTANT, SYSTEM, TOOL }

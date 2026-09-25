@@ -44,6 +44,8 @@ class SshHostTransport private constructor(
 
     override fun close() = client.close()
 
+    val isAlive: Boolean get() = client.isConnected && client.isAuthenticated
+
     /**
      * sshd runs commands through the account's login shell, which may be fish or another
      * non-POSIX shell. Every command here is POSIX sh, so hand it to sh explicitly.
