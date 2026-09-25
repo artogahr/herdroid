@@ -71,7 +71,8 @@ fun AgentAvatar(
 }
 
 /** The task title herdr shows, without the trailing "| project" part. */
-val Pane.displayTitle: String get() = title?.substringBefore(" | ")?.ifBlank { null } ?: name ?: agent ?: "Terminal"
+val Pane.displayTitle: String
+    get() = label?.ifBlank { null } ?: title?.substringBefore(" | ")?.ifBlank { null } ?: name ?: agent ?: "Terminal"
 
 /** Panes with a chat adapter open as a conversation; everything else opens as a terminal. */
 val Pane.hasChat: Boolean get() = AgentKind.of(agentSession?.agent ?: agent) != null

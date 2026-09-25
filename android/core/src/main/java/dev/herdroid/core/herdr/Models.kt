@@ -55,6 +55,8 @@ data class Pane(
     @SerialName("workspace_id") val workspaceId: String,
     val agent: String? = null,
     val name: String? = null,
+    /** A display name the user gave the pane (pane.rename); wins over the terminal title. */
+    val label: String? = null,
     @SerialName("agent_session") val agentSession: AgentSession? = null,
     @SerialName("agent_status") val agentStatus: AgentStatus? = null,
     val cwd: String? = null,
