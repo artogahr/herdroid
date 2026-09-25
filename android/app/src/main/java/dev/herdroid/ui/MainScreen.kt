@@ -156,13 +156,17 @@ fun MainScreen(
                         HorizontalPager(
                             state = pager,
                             key = { pages[it].id },
-                            // Terminals handle their own touch gestures.
-                            userScrollEnabled = !showTerminal,
                             modifier = Modifier.fillMaxSize(),
                         ) { page ->
                             val pane = pages[page]
                             if (terminalMode[pane.id] == true || !pane.hasChat) {
-                                TerminalPane(connected, pane)
+                                // The terminal is an Android View; the pager crashes placing one
+                                // that scrolls in or out, so only the settled page gets a live one.
+                                if (page == pager.settledPage && !pager.isScrollInProgress) {
+                                    TerminalPane(connected, pane)
+                                } else {
+                                    TerminalPlaceholder(pane)
+                                }
                             } else {
                                 ThreadPane(connected, pane, onOpenTerminal = { terminalMode[pane.id] = true })
                             }
@@ -247,6 +251,17 @@ private fun ReconnectBanner(state: ConnectionState.Reconnecting?) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+    }
+}
+
+@Composable
+private fun TerminalPlaceholder(pane: Pane) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(Icons.Filled.Terminal, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.outline)
+            Spacer(Modifier.size(8.dp))
+            Text(pane.displayTitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
