@@ -78,6 +78,11 @@
             exec adb logcat --pid="$pid" "$@"
           '';
 
+          deviceTest = script "herdroid-device-test" ''
+            ${gradleIn}
+            ./gradlew :app:connectedDebugAndroidTest "$@"
+          '';
+
           test = script "herdroid-test" ''
             ${gradleIn}
             ./gradlew test "$@"
@@ -106,6 +111,7 @@
             install = app install;
             logcat = app logcat;
             test = app test;
+            device-test = app deviceTest;
           };
 
           formatter = pkgs.nixfmt;

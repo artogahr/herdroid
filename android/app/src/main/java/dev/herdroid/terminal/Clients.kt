@@ -83,11 +83,20 @@ open class SessionClient(
 /** Holds latched modifier state for the extra-keys row. */
 class ViewClient(
     private val onTap: () -> Unit,
+    /** Pinch zoom: +1 or -1 font step, as the Termux app does it. */
+    private val onFontStep: (Int) -> Unit = {},
 ) : TerminalViewClient {
     var ctrlLatched = false
     var altLatched = false
 
-    override fun onScale(scale: Float): Float = scale.coerceIn(0.5f, 2f)
+    // The view accumulates the returned factor; step once it passes 10% and start over.
+    override fun onScale(scale: Float): Float {
+        if (scale < 0.9f || scale > 1.1f) {
+            onFontStep(if (scale > 1f) 1 else -1)
+            return 1f
+        }
+        return scale
+    }
 
     override fun onSingleTapUp(e: MotionEvent) = onTap()
 
