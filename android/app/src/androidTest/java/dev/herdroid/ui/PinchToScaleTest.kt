@@ -31,7 +31,12 @@ class PinchToScaleTest {
 
     private fun content() =
         compose.setContent {
-            Box(Modifier.size(360.dp).testTag("chat").pinchToScale({ scale }, { _, _ -> previews++ }, { scale = it }))
+            Box(
+                Modifier
+                    .size(360.dp)
+                    .testTag("chat")
+                    .pinchToScale(current = { scale }, onLive = { previews++ }, onCommit = { scale = it }),
+            )
         }
 
     @Test
@@ -42,8 +47,8 @@ class PinchToScaleTest {
         }
         compose.waitForIdle()
         assertTrue("scale $scale", scale > 1.3f)
-        // Fingers moving only preview; the scale itself is set once, on release.
-        assertTrue("previews $previews", previews > 1)
+        // The text re-flows live while the fingers move, not only on release.
+        assertTrue("live updates $previews", previews > 2)
     }
 
     @Test

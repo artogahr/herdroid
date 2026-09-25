@@ -191,8 +191,12 @@ class ThreadController(
         }
     }
 
+    /** Held while pinching: inserting older history would shift the list under the fingers. */
+    var pagingHeld by mutableStateOf(false)
+
     /** Prepends the chunk of transcript before what is loaded. Called when scrolling up. */
     suspend fun loadOlder() {
+        if (pagingHeld) return
         val file = path ?: return
         val kind = kind ?: return
         if (loadingOlder || historyStart <= 0) return

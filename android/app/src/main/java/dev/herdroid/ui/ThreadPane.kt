@@ -9,6 +9,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListItemInfo
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -72,6 +76,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -113,6 +118,7 @@ import dev.herdroid.core.thread.ToolVerb
 import dev.herdroid.data.ConnectionState
 import dev.herdroid.thread.ThreadController
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /** One agent conversation: messages, tool activity, and a floating composer. */
 @Composable
@@ -125,32 +131,19 @@ fun ThreadPane(
     Box(Modifier.fillMaxSize().imePadding()) {
         Column(Modifier.fillMaxSize()) {
             val prefs = uiPrefs()
-            var size by remember { mutableStateOf(IntSize.Zero) }
-            var zoom by remember { mutableFloatStateOf(1f) }
-            var zoomOrigin by remember { mutableStateOf(TransformOrigin.Center) }
+            val pinch = rememberChatPinch()
             Box(
                 Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .clipToBounds()
-                    .pinchToScale(
+                    .chatPinch(
+                        pinch,
                         current = { prefs.chatTextScale },
-                        onPreview = { z, focus ->
-                            zoom = z
-                            if (size.width > 0 && size.height > 0) zoomOrigin = TransformOrigin(focus.x / size.width, focus.y / size.height)
-                        },
-                        onCommit = { scale ->
-                            prefs.updateChatTextScale(scale)
-                            zoom = 1f
-                        },
-                    ).onSizeChanged { size = it }
-                    .graphicsLayer {
-                        scaleX = zoom
-                        scaleY = zoom
-                        transformOrigin = zoomOrigin
-                    },
+                        onHold = { thread.pagingHeld = it },
+                        onCommit = prefs::updateChatTextScale,
+                    ),
             ) {
-                ScaledText(prefs.chatTextScale) { Conversation(thread) }
+                ScaledText(pinch.liveScale ?: prefs.chatTextScale) { Conversation(thread) }
                 if (thread.awaitingFirstMessage && thread.items.isEmpty() && thread.outgoing.isEmpty()) {
                     Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         AgentAvatar(pane.agent, size = 56.dp)
@@ -225,7 +218,7 @@ private fun Conversation(thread: ThreadController) {
         }
         if (thread.hasOlder) {
             item(key = "older") {
-                LaunchedEffect(Unit) { thread.loadOlder() }
+                LaunchedEffect(thread.pagingHeld) { if (!thread.pagingHeld) thread.loadOlder() }
                 Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                 }
