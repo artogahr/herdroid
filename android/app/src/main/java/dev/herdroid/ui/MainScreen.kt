@@ -22,18 +22,14 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -93,7 +89,7 @@ fun MainScreen(
         }
     }
     val snapshot = session.snapshot
-    val drawer = rememberDrawerState(DrawerValue.Closed)
+    val drawer = rememberSideDrawerState()
     var selectedId by remember { mutableStateOf(connection.lastPaneId) }
     // Per pane: show the terminal instead of the chat.
     val terminalMode = remember { mutableStateMapOf<String, Boolean>() }
@@ -167,32 +163,29 @@ fun MainScreen(
     }
     val showTerminal = current != null && (terminalMode[current.id] == true || !current.hasChat)
 
-    ModalNavigationDrawer(
-        drawerState = drawer,
-        gesturesEnabled = drawer.isOpen,
+    SideDrawer(
+        state = drawer,
         drawerContent = {
-            ModalDrawerSheet {
-                Sidebar(
-                    host = connection.config.label,
-                    snapshot = snapshot,
-                    currentPane = current,
-                    onOpenWorkspace = { ws ->
-                        focus.clearFocus(force = true)
-                        val target =
-                            snapshot?.panes?.firstOrNull { it.tabId == ws.activeTabId && it.agent != null }
-                                ?: snapshot?.panes?.firstOrNull { it.tabId == ws.activeTabId }
-                                ?: snapshot?.panes?.firstOrNull { it.workspaceId == ws.id }
-                        target?.let { selectedId = it.id }
-                        scope.launch { drawer.close() }
-                    },
-                    onOpenPane = { pane ->
-                        focus.clearFocus(force = true)
-                        selectedId = pane.id
-                        scope.launch { drawer.close() }
-                    },
-                    onDisconnect = { connection.disconnect() },
-                )
-            }
+            Sidebar(
+                host = connection.config.label,
+                snapshot = snapshot,
+                currentPane = current,
+                onOpenWorkspace = { ws ->
+                    focus.clearFocus(force = true)
+                    val target =
+                        snapshot?.panes?.firstOrNull { it.tabId == ws.activeTabId && it.agent != null }
+                            ?: snapshot?.panes?.firstOrNull { it.tabId == ws.activeTabId }
+                            ?: snapshot?.panes?.firstOrNull { it.workspaceId == ws.id }
+                    target?.let { selectedId = it.id }
+                    scope.launch { drawer.close() }
+                },
+                onOpenPane = { pane ->
+                    focus.clearFocus(force = true)
+                    selectedId = pane.id
+                    scope.launch { drawer.close() }
+                },
+                onDisconnect = { connection.disconnect() },
+            )
         },
     ) {
         Scaffold(
@@ -242,9 +235,8 @@ fun MainScreen(
                             // The list can shrink under the pager when a pane closes mid-swipe.
                             key = { stablePages.getOrNull(it)?.id ?: "gone-$it" },
                             modifier =
-                                Modifier.fillMaxSize().swipeRightAtStart(pager) {
+                                Modifier.fillMaxSize().pullDrawerAtStart(pager, drawer, scope) {
                                     focus.clearFocus(force = true)
-                                    scope.launch { drawer.open() }
                                 },
                         ) { page ->
                             val pane = stablePages.getOrNull(page) ?: return@HorizontalPager
@@ -363,37 +355,3 @@ private fun TerminalPlaceholder(pane: Pane) {
         }
     }
 }
-
-/**
- * Swiping right on the first pane, where the pager cannot go further back, opens the side
- * panel. Watches in the Initial pass so terminals (Android views) cannot swallow the drag,
- * and never consumes: the pager has nothing to scroll there anyway.
- */
-private fun Modifier.swipeRightAtStart(
-    pager: PagerState,
-    onSwipe: () -> Unit,
-): Modifier =
-    pointerInput(pager) {
-        val slop = viewConfiguration.touchSlop
-        val threshold = 56.dp.toPx()
-        awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-            if (pager.canScrollBackward) return@awaitEachGesture
-            var dx = 0f
-            var dy = 0f
-            while (true) {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                if (!change.pressed) break
-                val delta = change.positionChange()
-                dx += delta.x
-                dy += delta.y
-                if (abs(dy) > slop && abs(dy) > abs(dx)) break
-                if (dx < -slop) break
-                if (dx > threshold && dx > 2 * abs(dy)) {
-                    onSwipe()
-                    break
-                }
-            }
-        }
-    }
