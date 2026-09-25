@@ -134,6 +134,10 @@ fun TerminalPane(
             factory = { ctx ->
                 TerminalView(ctx, null).apply {
                     setTerminalViewClient(viewClient)
+                    // The renderer leaves the default background unpainted, and agents draw
+                    // for a dark terminal: without this, default white text vanishes on the
+                    // light theme.
+                    setBackgroundColor(android.graphics.Color.BLACK)
                     setTextSize((prefs.terminalTextSize * ctx.resources.displayMetrics.scaledDensity).toInt())
                     isFocusable = false
                     isFocusableInTouchMode = false

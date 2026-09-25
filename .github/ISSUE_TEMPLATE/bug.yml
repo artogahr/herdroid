@@ -1,0 +1,44 @@
+name: Bug report
+description: Something in Herdroid does not work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: herdroid
+    attributes:
+      label: Herdroid version
+      description: Shown in Android's app info.
+    validations:
+      required: true
+  - type: input
+    id: herdr
+    attributes:
+      label: herdr version
+      description: The output of `herdr --version` on the server.
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Phone and Android version
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options: [Claude Code, Codex, Kimi Code, Other or terminal only]
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        For crashes, the output of `adb logcat -b crash -d`. Remove anything private, such as
+        prompts, paths or host names.
+      render: text
