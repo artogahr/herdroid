@@ -64,7 +64,17 @@ fun TerminalPane(
     val viewRef = remember { arrayOfNulls<TerminalView>(1) }
     // Typing only makes sense in control mode; an observing terminal never takes focus.
     val controlState = rememberUpdatedState(control)
-    val viewClient = remember { ViewClient(onTap = { if (controlState.value) viewRef[0]?.let { showKeyboard(context, it) } }) }
+    val prefs = uiPrefs()
+    val viewClient =
+        remember {
+            ViewClient(
+                onTap = { if (controlState.value) viewRef[0]?.let { showKeyboard(context, it) } },
+                onFontStep = { step ->
+                    prefs.updateTerminalTextSize(prefs.terminalTextSize + step)
+                    viewRef[0]?.setTextSize((prefs.terminalTextSize * context.resources.displayMetrics.scaledDensity).toInt())
+                },
+            )
+        }
     val terminal =
         remember(pane.id, connected, attempt) {
             RemoteTerminal(
@@ -114,7 +124,7 @@ fun TerminalPane(
             factory = { ctx ->
                 TerminalView(ctx, null).apply {
                     setTerminalViewClient(viewClient)
-                    setTextSize((11 * ctx.resources.displayMetrics.scaledDensity).toInt())
+                    setTextSize((prefs.terminalTextSize * ctx.resources.displayMetrics.scaledDensity).toInt())
                     isFocusable = false
                     isFocusableInTouchMode = false
                     attachSession(terminal.session)

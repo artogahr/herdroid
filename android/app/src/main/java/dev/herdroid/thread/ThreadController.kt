@@ -245,6 +245,7 @@ class ThreadController(
                         if (!dirty) continue
                         dirty = false
                         rebuild()
+                        Latency.log("built", (items.lastOrNull() as? ThreadItem.AssistantText)?.text)
                         title = parser.title
                         loading = false
                         hasOlder = historyStart > 0
@@ -265,6 +266,7 @@ class ThreadController(
                             if (at == null) {
                                 index[m.id] = messages.size
                                 messages += m
+                                if (m.kind == MessageKind.TEXT && m.role == Role.ASSISTANT) Latency.log("recv", m.text)
                                 if (m.role == Role.USER && m.kind == MessageKind.TEXT) {
                                     if (outbox.onUserMessage(m.text.orEmpty(), chunk.end)) publishOutbox()
                                 }

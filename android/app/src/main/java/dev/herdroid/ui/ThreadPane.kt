@@ -118,8 +118,14 @@ fun ThreadPane(
 
     Box(Modifier.fillMaxSize().imePadding()) {
         Column(Modifier.fillMaxSize()) {
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                Conversation(thread)
+            val prefs = uiPrefs()
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .pinchToScale({ prefs.chatTextScale }, prefs::updateChatTextScale),
+            ) {
+                ScaledText(prefs.chatTextScale) { Conversation(thread) }
                 if (thread.awaitingFirstMessage && thread.items.isEmpty() && thread.outgoing.isEmpty()) {
                     Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         AgentAvatar(pane.agent, size = 56.dp)
