@@ -70,6 +70,27 @@ class TranscriptSource(
             }
         }
 
+    /**
+     * Whole lines from the byte range just before [end], which must be a line boundary.
+     * Returns the lines and the offset where the first returned line starts; a partial line
+     * at the start of the range is dropped unless the range reaches the start of the file.
+     */
+    suspend fun readBefore(
+        path: String,
+        end: Long,
+        maxBytes: Long,
+    ): Pair<List<String>, Long> {
+        val start = (end - maxBytes).coerceAtLeast(0)
+        if (end <= start) return emptyList<String>() to start
+        val chunk = transport.run("tail -c +${start + 1} ${shellQuote(path)} | head -c ${end - start}")
+        var lines = chunk.split('\n')
+        if (lines.lastOrNull()?.isEmpty() == true) lines = lines.dropLast(1)
+        if (start > 0L) lines = lines.drop(1)
+        // Count back from the aligned end over whole lines only: the dropped partial line may
+        // start mid-character, so its decoded length is not its byte length.
+        return lines to end - lines.sumOf { it.encodeToByteArray().size + 1L }
+    }
+
     suspend fun size(path: String): Long = transport.run("wc -c < ${shellQuote(path)}").trim().toLong()
 
     /**

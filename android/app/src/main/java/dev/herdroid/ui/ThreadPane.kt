@@ -122,7 +122,7 @@ fun ThreadPane(
                 if (thread.loading && thread.items.isEmpty()) {
                     CircularProgressIndicator(Modifier.align(Alignment.Center))
                 }
-                thread.loadError?.let {
+                thread.loadError?.takeIf { thread.items.isEmpty() }?.let {
                     Text(
                         it,
                         style = MaterialTheme.typography.bodyMedium,
@@ -153,7 +153,8 @@ private fun Conversation(thread: ThreadController) {
         state = state,
         reverseLayout = true,
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        // Bottom: a short chat sits above the composer, like a messages app.
+        verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.Bottom),
     ) {
         item(key = "bottom") { Spacer(Modifier.size(8.dp)) }
         if (thread.status == AgentStatus.WORKING) item(key = "working") { WorkingIndicator() }
@@ -166,6 +167,14 @@ private fun Conversation(thread: ThreadController) {
                 is ThreadItem.AssistantText -> AssistantMessage(item.text)
                 is ThreadItem.Activity -> ActivityRow(item)
                 is ThreadItem.Notice -> NoticeRow(item.text)
+            }
+        }
+        if (thread.hasOlder) {
+            item(key = "older") {
+                LaunchedEffect(Unit) { thread.loadOlder() }
+                Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
             }
         }
         item(key = "top") { Spacer(Modifier.size(8.dp)) }
