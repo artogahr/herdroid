@@ -22,14 +22,6 @@ import kotlinx.coroutines.sync.withLock
 import net.schmizz.sshj.transport.verification.HostKeyVerifier
 import java.security.PublicKey
 
-data class HostConfig(
-    val host: String = "",
-    val port: Int = 22,
-    val user: String = "",
-) {
-    val complete get() = host.isNotEmpty() && user.isNotEmpty()
-}
-
 sealed interface ConnectionState {
     data object Disconnected : ConnectionState
 
@@ -52,6 +44,8 @@ sealed interface ConnectionState {
 
     data class Failed(
         val message: String,
+        /** Which saved server failed, so the list can show it on that card. */
+        val hostId: String? = null,
     ) : ConnectionState
 
     /** The host presented a key we have not trusted: first contact, or a changed key. */
@@ -84,29 +78,49 @@ class Connection(
     val keyPair by lazy { DeviceKey.get() }
     val authorizedKeysLine by lazy { SshKeys.authorizedKeysLine(keyPair.public, "herdroid@${Build.MODEL.replace(' ', '-')}") }
 
-    var config: HostConfig
-        get() =
-            HostConfig(
-                prefs.getString("host", "") ?: "",
-                prefs.getInt("port", 22),
-                prefs.getString("user", "") ?: "",
-            )
-        set(value) =
-            prefs.edit {
-                putString("host", value.host)
-                putInt("port", value.port)
-                putString("user", value.user)
-            }
+    private val store = HostStore(prefs)
+    private val _hosts = MutableStateFlow(store.all())
 
-    private val HostConfig.hostKeyPref get() = "hostkey:$host:$port"
-    private val HostConfig.herdrPref get() = "herdr:$user@$host:$port"
+    /** Saved servers, most recently used first. */
+    val hosts: StateFlow<List<SavedHost>> = _hosts
+
+    /** The server being connected to, or last connected to. */
+    var config: SavedHost = store.lastUsed() ?: SavedHost()
+        private set
+
+    private val SavedHost.hostKeyPref get() = "hostkey:$host:$port"
+    private val SavedHost.herdrPref get() = "herdr:$user@$host:$port"
 
     val pinnedHostKey: String? get() = prefs.getString(config.hostKeyPref, null)
 
-    /** Connect at launch when this host has worked before. */
+    fun pinnedHostKey(host: SavedHost): String? = prefs.getString(host.hostKeyPref, null)
+
+    fun saveHost(host: SavedHost) {
+        store.save(host)
+        _hosts.value = store.all()
+    }
+
+    fun deleteHost(id: String) {
+        if (config.id == id && _state.value.session != null) disconnect()
+        store.delete(id)
+        _hosts.value = store.all()
+    }
+
+    /** Connect to [host] and remember it as the last used one. */
+    fun connectTo(host: SavedHost) {
+        if (_state.value.session != null && config.id != host.id) disconnect()
+        config = host.copy(lastUsed = System.currentTimeMillis())
+        saveHost(config)
+        connectInBackground()
+    }
+
+    /**
+     * At launch, reconnect to the last used server if it has worked before (its key is
+     * pinned). If it does not answer, the server list shows the error on its card.
+     */
     fun autoConnect() {
         if (config.complete && pinnedHostKey != null && _state.value == ConnectionState.Disconnected) {
-            scope.launch { connect() }
+            connectInBackground()
         }
     }
 
@@ -198,14 +212,14 @@ class Connection(
                     delay((1_000L shl (attempt - 1).coerceAtMost(4)).coerceAtMost(15_000))
                 }
                 // Stop draining the battery; returning to the app tries again.
-                _state.value = ConnectionState.Failed("Could not reach ${config.host}: ${error ?: "no answer"}")
+                _state.value = ConnectionState.Failed("Could not reach ${config.label}: ${error ?: "no answer"}", config.id)
             }
     }
 
     private fun Result<ConnectionState.Connected>.toState(): ConnectionState =
         fold(
             { it },
-            { e -> (e as? HostKeyMismatch)?.state ?: ConnectionState.Failed(e.message ?: e.javaClass.simpleName) },
+            { e -> (e as? HostKeyMismatch)?.state ?: ConnectionState.Failed(describe(e), config.id) },
         )
 
     private suspend fun open(): Result<ConnectionState.Connected> {
@@ -239,7 +253,7 @@ class Connection(
 
     /** The cached herdr path, located again once if it stopped working (e.g. after a nix gc). */
     private suspend fun herdrPath(
-        cfg: HostConfig,
+        cfg: SavedHost,
         transport: SshHostTransport,
     ): String {
         prefs.getString(cfg.herdrPref, null)?.let { cached ->
@@ -253,7 +267,7 @@ class Connection(
 
     /** Accepts only the pinned key; records any other key so the user can decide. */
     private fun verifier(
-        cfg: HostConfig,
+        cfg: SavedHost,
         seen: Array<String?>,
     ) = object : HostKeyVerifier {
         override fun verify(
@@ -271,6 +285,34 @@ class Connection(
             hostname: String,
             port: Int,
         ): List<String> = emptyList()
+    }
+
+    /** What went wrong, in terms of what the user can check. */
+    private fun describe(e: Throwable): String {
+        val causes = generateSequence(e) { it.cause }.toList()
+        return when {
+            causes.any {
+                it is java.net.SocketTimeoutException || it is java.net.ConnectException || it is java.net.NoRouteToHostException
+            } -> {
+                "Not reachable. Check that the machine is on and Tailscale is connected."
+            }
+
+            causes.any { it is java.net.UnknownHostException } -> {
+                "Unknown host name."
+            }
+
+            causes.any { it is net.schmizz.sshj.userauth.UserAuthException } -> {
+                "The server rejected this phone's key. Add it to ~/.ssh/authorized_keys."
+            }
+
+            causes.any { it.message?.contains("herdr") == true } -> {
+                e.message ?: "herdr is not available on this server."
+            }
+
+            else -> {
+                e.message ?: e.javaClass.simpleName
+            }
+        }
     }
 
     /** Last pane the user looked at, to reopen on launch. */
