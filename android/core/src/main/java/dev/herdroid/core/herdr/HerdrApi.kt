@@ -112,4 +112,4 @@ class HerdrApi(
     }
 }
 
-internal fun shellQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
+fun shellQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"

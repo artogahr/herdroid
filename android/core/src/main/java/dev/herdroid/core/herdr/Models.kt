@@ -60,6 +60,7 @@ data class Pane(
     val cwd: String? = null,
     @SerialName("foreground_cwd") val foregroundCwd: String? = null,
     @SerialName("terminal_title_stripped") val title: String? = null,
+    @SerialName("terminal_id") val terminalId: String? = null,
     val focused: Boolean = false,
     val revision: Long = 0,
 )

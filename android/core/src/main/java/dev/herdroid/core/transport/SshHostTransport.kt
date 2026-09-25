@@ -1,5 +1,6 @@
 package dev.herdroid.core.transport
 
+import dev.herdroid.core.herdr.shellQuote
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -16,13 +17,13 @@ class SshHostTransport private constructor(
     override suspend fun exec(command: String): ExecChannel =
         withContext(Dispatchers.IO) {
             val session = client.startSession()
-            SshExecChannel(session, session.exec(command))
+            SshExecChannel(session, session.exec(posix(command)))
         }
 
     override suspend fun run(command: String): String =
         withContext(Dispatchers.IO) {
             client.startSession().use { session ->
-                val cmd = session.exec(command)
+                val cmd = session.exec(posix(command))
                 val out = cmd.inputStream.readBytes().decodeToString()
                 val err = cmd.errorStream.readBytes().decodeToString()
                 cmd.join(30, TimeUnit.SECONDS)
@@ -33,6 +34,12 @@ class SshHostTransport private constructor(
         }
 
     override fun close() = client.close()
+
+    /**
+     * sshd runs commands through the account's login shell, which may be fish or another
+     * non-POSIX shell. Every command here is POSIX sh, so hand it to sh explicitly.
+     */
+    private fun posix(command: String) = "sh -c ${shellQuote(command)}"
 
     companion object {
         suspend fun connect(
