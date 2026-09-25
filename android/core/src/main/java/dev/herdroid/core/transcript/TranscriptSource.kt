@@ -49,16 +49,36 @@ class TranscriptSource(
     fun follow(
         path: String,
         offset: Long = 0,
+        skipPartialFirstLine: Boolean = false,
     ): Flow<TranscriptLine> =
         flow {
-            transport.exec("tail -c +${offset + 1} -F ${shellQuote(path)} 2>/dev/null").use { channel ->
+            transport.exec("tail -c +${offset + 1} -F ${shellQuote(path)} 2>/dev/null", stopOnEof = true).use { channel ->
                 var position = offset
+                var skip = skipPartialFirstLine
                 channel.lines.collect { line ->
                     position += line.encodeToByteArray().size + 1
-                    emit(TranscriptLine(line, position))
+                    if (skip) {
+                        skip = false
+                    } else {
+                        emit(TranscriptLine(line, position))
+                    }
                 }
             }
         }
+
+    suspend fun size(path: String): Long = transport.run("wc -c < ${shellQuote(path)}").trim().toLong()
+
+    /**
+     * Follows only the last [maxBytes] of the file. Transcripts reach tens of megabytes,
+     * mostly tool output, so a thread opens from its recent end.
+     */
+    suspend fun followRecent(
+        path: String,
+        maxBytes: Long = 512 * 1024,
+    ): Flow<TranscriptLine> {
+        val start = (size(path) - maxBytes).coerceAtLeast(0)
+        return follow(path, start, skipPartialFirstLine = start > 0)
+    }
 
     companion object {
         fun parserFor(kind: AgentKind): TranscriptParser =

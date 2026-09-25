@@ -7,11 +7,19 @@ import java.io.IOException
 
 /** Runs commands on this machine through `sh -c`; stands in for SSH in live tests. */
 class LocalHostTransport : HostTransport {
-    override suspend fun exec(command: String): ExecChannel =
+    override suspend fun exec(
+        command: String,
+        stopOnEof: Boolean,
+    ): ExecChannel =
         withContext(Dispatchers.IO) {
-            val process = ProcessBuilder("sh", "-c", command).redirectError(java.io.File("/dev/null")).start()
+            val process =
+                ProcessBuilder(
+                    "sh",
+                    "-c",
+                    if (stopOnEof) stopOnEofScript(command) else command,
+                ).redirectError(java.io.File("/dev/null")).start()
             object : ExecChannel {
-                override val lines: Flow<String> = process.inputStream.lineFlow { process.destroy() }
+                override val lines: Flow<String> = process.inputStream.lineFlow { close() }
 
                 override suspend fun write(text: String) =
                     withContext(Dispatchers.IO) {
@@ -22,6 +30,7 @@ class LocalHostTransport : HostTransport {
                 override suspend fun closeInput() = withContext(Dispatchers.IO) { process.outputStream.close() }
 
                 override fun close() {
+                    runCatching { process.outputStream.close() }
                     process.destroy()
                 }
             }

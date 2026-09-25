@@ -59,16 +59,17 @@ fun ThreadScreen(
             status = "No chat view for ${session.agent}; use the terminal."
             return@LaunchedEffect
         }
-        val path = runCatching { connected.transcripts.locate(kind, session.value, pane.cwd) }.getOrNull()
+        val located = runCatching { connected.transcripts.locate(kind, session.value, pane.cwd) }
+        val path = located.getOrNull()
         if (path == null) {
-            status = "Transcript not found."
+            status = located.exceptionOrNull()?.let { "Could not look up the transcript: ${it.message}" } ?: "Transcript not found."
             return@LaunchedEffect
         }
         status = ""
         val parser = TranscriptSource.parserFor(kind)
         val index = HashMap<String, Int>()
         runCatching {
-            connected.transcripts.follow(path).collect { line ->
+            connected.transcripts.followRecent(path).collect { line ->
                 for (m in parser.feed(line.text)) {
                     if (m.meta) continue
                     if (m.kind == MessageKind.UNKNOWN) unknown++

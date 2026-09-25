@@ -7,11 +7,21 @@ import com.termux.terminal.TerminalSessionClient
 import dev.herdroid.core.herdr.shellQuote
 import dev.herdroid.core.transport.ExecChannel
 import dev.herdroid.core.transport.HostTransport
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -20,23 +30,23 @@ import kotlinx.serialization.json.put
 /**
  * Connects a Termux [TerminalSession] to `herdr terminal session observe|control`.
  * herdr renders the pane at the size we ask for and sends ANSI frames, so the emulator
- * only needs to replay them. Control mode resizes the real PTY for every client.
+ * only replays them. Control mode resizes the real PTY for every client.
  */
+@OptIn(FlowPreview::class)
 class RemoteTerminal(
-    private val scope: CoroutineScope,
+    scope: CoroutineScope,
     private val transport: HostTransport,
     private val herdrPath: String,
     private val terminalId: String,
     client: TerminalSessionClient,
     private val onClosed: (String) -> Unit,
 ) {
-    var control: Boolean = false
-        private set
-
-    private var size: Pair<Int, Int>? = null
-    private var channel: ExecChannel? = null
-    private var job: Job? = null
+    private val control = MutableStateFlow(false)
+    private val size = MutableStateFlow<Pair<Int, Int>?>(null)
     private val outgoing = Channel<String>(Channel.UNLIMITED)
+    private var channel: ExecChannel? = null
+
+    @Volatile private var closedByServer = false
 
     val session =
         TerminalSession(
@@ -48,7 +58,7 @@ class RemoteTerminal(
                     offset: Int,
                     count: Int,
                 ) {
-                    if (!control) return
+                    if (!control.value) return
                     val b64 = Base64.encodeToString(data, offset, count, Base64.NO_WRAP)
                     outgoing.trySend(message("terminal.input") { put("bytes", b64) })
                 }
@@ -57,56 +67,85 @@ class RemoteTerminal(
                     columns: Int,
                     rows: Int,
                 ) {
-                    if (size == columns to rows) return
-                    size = columns to rows
-                    if (control && channel != null) {
-                        outgoing.trySend(
-                            message("terminal.resize") {
-                                put("cols", columns)
-                                put("rows", rows)
-                            },
-                        )
-                    } else {
-                        restart()
-                    }
+                    size.value = columns to rows
                 }
             },
         )
 
+    private val job =
+        scope.launch {
+            control.collectLatest { controlling ->
+                if (controlling) {
+                    val (cols, rows) = size.filterNotNull().first()
+                    coroutineScope {
+                        launch {
+                            size.filterNotNull().drop(1).debounce(150).collect { (c, r) ->
+                                outgoing.trySend(
+                                    message("terminal.resize") {
+                                        put("cols", c)
+                                        put("rows", r)
+                                    },
+                                )
+                            }
+                        }
+                        // Takeover also replaces our own observe stream, which may still be
+                        // closing. The user confirmed taking control before this runs.
+                        stream("control", cols, rows, stopOnEof = false, extra = "--takeover")
+                    }
+                } else {
+                    // Observe cannot resize the pane, so each new size needs a new stream.
+                    size.filterNotNull().debounce(150).collectLatest { (cols, rows) ->
+                        stream("observe", cols, rows, stopOnEof = true)
+                    }
+                }
+            }
+        }
+
+    val controlling: Boolean get() = control.value
+
     fun setControl(enabled: Boolean) {
-        if (enabled == control) return
-        control = enabled
-        restart()
+        control.value = enabled
     }
 
     fun sendText(text: String) {
-        if (control) outgoing.trySend(message("terminal.input") { put("text", text) })
+        if (control.value) outgoing.trySend(message("terminal.input") { put("text", text) })
     }
 
+    /** Releases control so the pane returns to its desktop size, then closes the stream. */
     fun close() {
-        job?.cancel()
-        channel?.close()
+        job.cancel()
+        val ch = channel ?: return
+        if (!control.value) return ch.close()
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { ch.write(message("terminal.release") {} + "\n") }
+            ch.close()
+        }
     }
 
-    private fun restart() {
-        val (cols, rows) = size ?: return
-        job?.cancel()
-        channel?.close()
-        val mode = if (control) "control" else "observe"
-        val command = "${shellQuote(herdrPath)} terminal session $mode ${shellQuote(terminalId)} --cols $cols --rows $rows"
-        job =
-            scope.launch {
-                try {
-                    val ch = transport.exec(command)
-                    channel = ch
+    private suspend fun stream(
+        mode: String,
+        cols: Int,
+        rows: Int,
+        stopOnEof: Boolean,
+        extra: String = "",
+    ) {
+        val command = "${shellQuote(herdrPath)} terminal session $mode ${shellQuote(terminalId)} $extra --cols $cols --rows $rows"
+        try {
+            transport.exec(command, stopOnEof).use { ch ->
+                channel = ch
+                coroutineScope {
                     val writer = launch { for (line in outgoing) ch.write(line + "\n") }
-                    ch.lines.collect { line -> handle(line) }
+                    ch.lines.collect { handle(it) }
                     writer.cancel()
-                } catch (e: Exception) {
-                    Log.w("RemoteTerminal", "terminal stream failed", e)
-                    onClosed(e.message ?: "terminal stream failed")
                 }
             }
+            if (!closedByServer) onClosed("terminal stream ended")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("RemoteTerminal", "terminal stream failed", e)
+            onClosed(e.message ?: "terminal stream failed")
+        }
     }
 
     private fun handle(line: String) {
@@ -118,6 +157,7 @@ class RemoteTerminal(
             }
 
             "terminal.closed" -> {
+                closedByServer = true
                 onClosed(obj["reason"]?.jsonPrimitive?.content ?: "closed")
             }
         }
@@ -125,7 +165,7 @@ class RemoteTerminal(
 
     private fun message(
         type: String,
-        body: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
+        body: JsonObjectBuilder.() -> Unit,
     ) = buildJsonObject {
         put("type", type)
         body()
