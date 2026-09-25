@@ -66,13 +66,13 @@
             ${gradleIn}
             ./gradlew --quiet :app:assembleDebug
             adb install -r app/build/outputs/apk/debug/app-debug.apk
-            adb shell am start -n dev.herdroid/.MainActivity
+            adb shell am start -n dev.herdroid.debug/dev.herdroid.MainActivity
           '';
 
           logcat = script "herdroid-logcat" ''
-            pid="$(adb shell pidof dev.herdroid || true)"
+            pid="$(adb shell pidof dev.herdroid.debug || true)"
             if [ -z "$pid" ]; then
-              echo "dev.herdroid is not running" >&2
+              echo "dev.herdroid.debug is not running" >&2
               exit 1
             fi
             exec adb logcat --pid="$pid" "$@"

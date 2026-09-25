@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
+      - name: Check formatting
+        run: nix flake check --print-build-logs
+
+      - name: Test, lint and build
+        working-directory: android
+        run: nix develop --command ./gradlew --console=plain test :app:lintDebug :app:assembleDebug :app:assembleRelease
+
+      - name: Upload the debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: herdroid-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+
+      - name: Upload reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports
+          path: |
+            android/*/build/reports/
+            android/*/build/test-results/
+          retention-days: 14
