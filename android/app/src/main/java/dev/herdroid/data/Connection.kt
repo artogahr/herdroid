@@ -76,6 +76,10 @@ class Connection(
     val state: StateFlow<ConnectionState> = _state
 
     val keyPair by lazy { DeviceKey.get() }
+
+    /** Where the private key is kept, for the key card. */
+    val keyStorage by lazy { DeviceKey.storage(keyPair.private) }
+
     val authorizedKeysLine by lazy { SshKeys.authorizedKeysLine(keyPair.public, "herdroid@${Build.MODEL.replace(' ', '-')}") }
 
     private val store = HostStore(prefs)
