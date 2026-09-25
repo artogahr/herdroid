@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "herdroid"
-include(":app")
+include(":app", ":core")
