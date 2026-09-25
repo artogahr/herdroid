@@ -7,6 +7,7 @@ import dev.herdroid.core.herdr.HerdrApi
 import dev.herdroid.core.transcript.TranscriptSource
 import dev.herdroid.core.transport.SshHostTransport
 import dev.herdroid.core.transport.SshKeys
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -119,10 +120,18 @@ class Connection(
         startWatchdog()
     }
 
+    /**
+     * Starts connecting in this object's scope. UI scopes must not own the attempt: the
+     * dialog or screen that asked goes away as soon as the state changes.
+     */
+    fun connectInBackground() {
+        scope.launch { connect() }
+    }
+
     /** The user checked the fingerprint; pin it and connect. */
-    suspend fun trustHostKey(fingerprint: String) {
+    fun trustHostKey(fingerprint: String) {
         prefs.edit { putString(config.hostKeyPref, fingerprint) }
-        connect()
+        connectInBackground()
     }
 
     /** Call when the app returns to the foreground: sockets rarely survive a sleeping phone. */
@@ -202,7 +211,7 @@ class Connection(
     private suspend fun open(): Result<ConnectionState.Connected> {
         val cfg = config
         val seen = arrayOfNulls<String>(1)
-        return runCatching {
+        return try {
             val transport =
                 try {
                     SshHostTransport.connect(cfg.host, cfg.port, cfg.user, SshKeys.keyProvider(keyPair), verifier(cfg, seen))
@@ -216,11 +225,15 @@ class Connection(
                     throw e
                 }
             try {
-                ConnectionState.Connected(transport = transport, herdrPath = herdrPath(cfg, transport))
+                Result.success(ConnectionState.Connected(transport = transport, herdrPath = herdrPath(cfg, transport)))
             } catch (e: Exception) {
                 transport.close()
                 throw e
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 

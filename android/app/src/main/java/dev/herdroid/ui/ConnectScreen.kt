@@ -26,7 +26,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -38,7 +37,6 @@ import androidx.compose.ui.unit.dp
 import dev.herdroid.data.Connection
 import dev.herdroid.data.ConnectionState
 import dev.herdroid.data.HostConfig
-import kotlinx.coroutines.launch
 
 @Composable
 fun ConnectScreen(
@@ -49,7 +47,6 @@ fun ConnectScreen(
     var host by remember { mutableStateOf(initial.host) }
     var user by remember { mutableStateOf(initial.user) }
     var port by remember { mutableStateOf(initial.port.toString()) }
-    val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val pubkey =
@@ -91,7 +88,7 @@ fun ConnectScreen(
                 enabled = host.isNotEmpty() && user.isNotEmpty() && state !is ConnectionState.Connecting,
                 onClick = {
                     connection.config = HostConfig(host, port.toIntOrNull() ?: 22, user)
-                    scope.launch { connection.connect() }
+                    connection.connectInBackground()
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Connect") }
@@ -102,6 +99,10 @@ fun ConnectScreen(
 
                 is ConnectionState.Failed -> {
                     Text(state.message, color = MaterialTheme.colorScheme.error)
+                }
+
+                is ConnectionState.HostKeyCheck -> {
+                    HostKeyDialog(connection, state)
                 }
 
                 else -> {}
@@ -134,7 +135,6 @@ private fun HostKeyDialog(
     connection: Connection,
     check: ConnectionState.HostKeyCheck,
 ) {
-    val scope = rememberCoroutineScope()
     val changed = check.previous != null
     AlertDialog(
         onDismissRequest = { connection.disconnect() },
@@ -159,7 +159,7 @@ private fun HostKeyDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { scope.launch { connection.trustHostKey(check.fingerprint) } }) {
+            TextButton(onClick = { connection.trustHostKey(check.fingerprint) }) {
                 Text(if (changed) "Trust new key" else "Trust")
             }
         },
