@@ -33,12 +33,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -52,6 +54,7 @@ import dev.herdroid.core.herdr.Snapshot
 import dev.herdroid.data.Connection
 import dev.herdroid.data.ConnectionState
 import dev.herdroid.data.HerdrSession
+import dev.herdroid.thread.ThreadController
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -69,10 +72,16 @@ fun MainScreen(
     var selectedId by remember { mutableStateOf(connection.lastPaneId) }
     // Per pane: show the terminal instead of the chat.
     val terminalMode = remember { mutableStateMapOf<String, Boolean>() }
+    // One controller per pane for this connection, so swiping back does not reload.
+    val threads = remember(connected) { HashMap<String, ThreadController>() }
+
+    fun threadFor(pane: Pane) = threads.getOrPut(pane.id) { ThreadController(scope, connected, pane) }
+    DisposableEffect(threads) { onDispose { threads.values.forEach { it.deactivate() } } }
 
     val selected = snapshot?.let { snap -> snap.panes.firstOrNull { it.id == selectedId } ?: defaultPane(snap) }
     val pages = selected?.let { session.swipeOrder(it.workspaceId) }.orEmpty()
-    val pager = rememberPagerState(pageCount = { pages.size })
+    val latestPages by rememberUpdatedState(pages)
+    val pager = rememberPagerState(pageCount = { latestPages.size })
 
     // Opening a pane from the side panel scrolls the pager to it.
     LaunchedEffect(selected?.id, pages.size) {
@@ -90,6 +99,13 @@ fun MainScreen(
     }
 
     val current = pages.getOrNull(pager.currentPage) ?: selected
+
+    // Only the pane on screen streams; the rest keep what they already loaded.
+    val settledId = pages.getOrNull(pager.settledPage)?.id
+    LaunchedEffect(settledId, threads) {
+        threads.forEach { (id, thread) -> if (id != settledId) thread.deactivate() }
+        pages.getOrNull(pager.settledPage)?.takeIf { it.hasChat }?.let { threadFor(it).activate() }
+    }
     val showTerminal = current != null && (terminalMode[current.id] == true || !current.hasChat)
 
     ModalNavigationDrawer(
@@ -155,10 +171,11 @@ fun MainScreen(
                     else -> {
                         HorizontalPager(
                             state = pager,
-                            key = { pages[it].id },
+                            // The list can shrink under the pager when a pane closes mid-swipe.
+                            key = { latestPages.getOrNull(it)?.id ?: "gone-$it" },
                             modifier = Modifier.fillMaxSize(),
                         ) { page ->
-                            val pane = pages[page]
+                            val pane = latestPages.getOrNull(page) ?: return@HorizontalPager
                             if (terminalMode[pane.id] == true || !pane.hasChat) {
                                 // The terminal is an Android View; the pager crashes placing one
                                 // that scrolls in or out, so only the settled page gets a live one.
@@ -168,7 +185,7 @@ fun MainScreen(
                                     TerminalPlaceholder(pane)
                                 }
                             } else {
-                                ThreadPane(connected, pane, onOpenTerminal = { terminalMode[pane.id] = true })
+                                ThreadPane(threadFor(pane), onOpenTerminal = { terminalMode[pane.id] = true })
                             }
                         }
                     }

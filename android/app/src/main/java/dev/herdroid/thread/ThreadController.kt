@@ -1,5 +1,6 @@
 package dev.herdroid.thread
 
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -14,10 +15,13 @@ import dev.herdroid.core.model.MessageKind
 import dev.herdroid.core.model.Role
 import dev.herdroid.core.thread.ThreadItem
 import dev.herdroid.core.thread.ThreadItems
+import dev.herdroid.core.transcript.TranscriptParser
 import dev.herdroid.core.transcript.TranscriptSource
 import dev.herdroid.data.ConnectionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
@@ -72,9 +76,30 @@ class ThreadController(
     var awaitingFirstMessage by mutableStateOf(false)
         private set
 
-    fun start() {
-        scope.launch { followTranscript() }
-        scope.launch { followStatus() }
+    /** Scroll position survives swiping away and back. */
+    val listState = LazyListState()
+
+    private var job: Job? = null
+    private var path: String? = null
+    private var parser: TranscriptParser? = null
+    private var offset = -1L
+
+    /**
+     * Streams live only while on screen. Parsed messages, the file offset and the scroll
+     * position stay, so coming back resumes from where it stopped instead of reloading.
+     */
+    fun activate() {
+        if (job?.isActive == true) return
+        job =
+            scope.launch {
+                launch { followTranscript() }
+                launch { followStatus() }
+            }
+    }
+
+    fun deactivate() {
+        job?.cancel()
+        job = null
     }
 
     fun send(text: String) {
@@ -137,54 +162,66 @@ class ThreadController(
             loadError = "No chat view for this agent yet. Open the terminal instead."
             return
         }
-        val session = pane.agentSession ?: waitForSession()
-        var path: String? = null
-        for (attempt in 1..5) {
-            path =
-                runCatching { connected.transcripts.locate(kind, session.value, pane.cwd) }
-                    .onFailure { loadError = "Could not find the conversation: ${it.message}" }
-                    .getOrNull()
-            if (path != null) break
-            delay(1_500)
-        }
-        if (path == null) {
+        val file =
+            path ?: run {
+                val session = pane.agentSession ?: waitForSession()
+                var found: String? = null
+                for (attempt in 1..5) {
+                    found =
+                        runCatching { connected.transcripts.locate(kind, session.value, pane.cwd) }
+                            .onFailure { loadError = "Could not find the conversation: ${it.message}" }
+                            .getOrNull()
+                    if (found != null) break
+                    delay(1_500)
+                }
+                found
+            }
+        if (file == null) {
             loading = false
             if (loadError == null) loadError = "This agent has no saved conversation yet."
             return
         }
-        val parser = TranscriptSource.parserFor(kind)
+        path = file
+        loadError = null
+        val parser = parser ?: TranscriptSource.parserFor(kind).also { parser = it }
         var dirty = false
-        // Rebuild the item list at most every 100 ms while a large backlog streams in.
-        scope.launch {
-            while (true) {
-                delay(100)
-                if (dirty) {
-                    dirty = false
-                    items = ThreadItems.build(messages)
-                    loading = false
-                    reconcileOutgoing()
-                }
-            }
-        }
-        runCatching {
-            connected.transcripts
-                .followRecent(path)
-                .map { line -> parser.feed(line.text) }
-                .flowOn(Dispatchers.Default)
-                .collect { parsed ->
-                    for (m in parsed) {
-                        val at = index[m.id]
-                        if (at == null) {
-                            index[m.id] = messages.size
-                            messages += m
-                        } else {
-                            messages[at] = m
+        coroutineScope {
+            // Rebuild the item list at most every 100 ms while a large backlog streams in.
+            val ticker =
+                launch {
+                    while (true) {
+                        delay(100)
+                        if (dirty) {
+                            dirty = false
+                            items = ThreadItems.build(messages)
+                            loading = false
+                            reconcileOutgoing()
                         }
-                        dirty = true
                     }
-                    if (!dirty) loading = false
                 }
-        }.onFailure { loadError = "Connection lost: ${it.message}" }
+            val lines =
+                if (offset < 0) connected.transcripts.followRecent(file) else connected.transcripts.follow(file, offset)
+            runCatching {
+                lines
+                    .map { line -> line.endOffset to parser.feed(line.text) }
+                    .flowOn(Dispatchers.Default)
+                    .collect { (end, parsed) ->
+                        offset = end
+                        for (m in parsed) {
+                            val at = index[m.id]
+                            if (at == null) {
+                                index[m.id] = messages.size
+                                messages += m
+                            } else {
+                                messages[at] = m
+                            }
+                            dirty = true
+                        }
+                        if (!dirty) loading = false
+                    }
+            }.onFailure { if (it !is kotlinx.coroutines.CancellationException) loadError = "Connection lost: ${it.message}" }
+            ticker.cancel()
+        }
     }
 
     /** herdr learns a new agent's session from its hooks, usually at the first prompt. */

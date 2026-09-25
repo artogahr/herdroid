@@ -98,13 +98,10 @@ import dev.herdroid.thread.ThreadController
 /** One agent conversation: messages, tool activity, and a floating composer. */
 @Composable
 fun ThreadPane(
-    connected: ConnectionState.Connected,
-    pane: Pane,
+    thread: ThreadController,
     onOpenTerminal: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
-    val thread = remember(pane.id, connected) { ThreadController(scope, connected, pane) }
-    LaunchedEffect(thread) { thread.start() }
+    val pane = thread.pane
 
     Box(Modifier.fillMaxSize().imePadding()) {
         Column(Modifier.fillMaxSize()) {
@@ -149,7 +146,7 @@ fun ThreadPane(
 
 @Composable
 private fun Conversation(thread: ThreadController) {
-    val state = rememberLazyListState()
+    val state = thread.listState
     // Newest at the bottom: a reversed list starts there and stays there as messages arrive.
     val rows = thread.items.asReversed()
     LazyColumn(
