@@ -59,7 +59,7 @@ class ClaudeTranscriptParser : TranscriptParser {
             }
 
             "attachment", "summary", "queue-operation", "last-prompt", "mode", "permission-mode", "agent-name",
-            "pr-link", "cost-state", "worktree-state",
+            "pr-link", "cost-state", "worktree-state", "atis-latch", "bridge-session", "continued-in", "relocated",
             -> {
                 return emptyList()
             }
