@@ -84,4 +84,11 @@ class PromptParserTest {
         // The list sits above the input box, so it is not the bottom of the screen.
         assertNull(parse("claude-question.txt"))
     }
+
+    @Test
+    fun answerAboveALabelledInputBoxIsNotAPrompt() {
+        // Seen on the phone: Claude's input border carries the session name, the input line
+        // "❯ …" looked like a cursor, and prose mentioning Esc looked like a key hint.
+        assertNull(parse("claude-answer-streaming.txt"))
+    }
 }

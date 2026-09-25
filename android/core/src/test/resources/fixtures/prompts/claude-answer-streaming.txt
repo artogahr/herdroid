@@ -1,0 +1,14 @@
+⏺ Agent questions and approvals now get a native card in the chat.
+
+  What you see: when an agent asks something, a card appears above the message box. It
+  shows:
+  - the agent's question, with commands in monospace
+  - one button per choice, with the choice's description under it
+  - Cancel, which sends Esc
+  - Terminal, as a fallback
+
+✻ Worked for 2m 10s
+────────────────────────────────────────────────────────────────────────────── herdroid-android-client ─
+❯ ok thanks, let me try it
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on · 1 shell · esc to interrupt · ← 1 agent · ↓ to manage

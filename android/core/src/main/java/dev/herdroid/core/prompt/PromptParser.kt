@@ -30,7 +30,15 @@ data class Prompt(
 object PromptParser {
     private val numbered = Regex("""^(\s*)(?:[❯›▶>]\s*)?(\d{1,2})[.)]\s+(\S.*)$""")
     private val cursor = Regex("""^(\s*)([❯›▶])\s+(\S.*)$""")
-    private val separator = Regex("""^\s*[╭╰│]?[─━═╌]{12,}[╮╯│]?\s*$|^\s*[─━═]{3,}.*[─━═]{12,}\s*$""")
+    private val boxChars = "─━═╌╭╮╰╯│"
+
+    /** A rule line, possibly with a label in it ("──── my-session ─"): mostly box drawing. */
+    private fun isSeparator(text: String): Boolean {
+        val t = text.trim()
+        val box = t.count { it in boxChars }
+        return box >= 12 && box * 10 >= t.length * 6
+    }
+
     private val hintWords =
         Regex("""(?i)(↑|↓|↵|\benter\b|\besc\b|to confirm|to cancel|to select|to continue|navigate|choose|submit|tab to amend)""")
     private val textEntryHint = Regex("""(?i)\btype\b.*(submit|↵|enter)""")
@@ -71,9 +79,11 @@ object PromptParser {
                     wantsText = wantsText.containsMatchIn(label),
                 )
             }
-        val after = (last + 1) until bottom.size
         // Most agents put the key hint under the options; Kimi's folder trust puts it above.
-        val before = (first - 1) downTo maxOf(0, first - 10)
+        // Either way it sits in the prompt's own box: never search past a rule line, or
+        // Claude's permanent footer ("esc to interrupt · ↓ to manage") would count.
+        val after = ((last + 1) until bottom.size).takeWhile { !isSeparator(bottom[it].text) }
+        val before = ((first - 1) downTo maxOf(0, first - 10)).takeWhile { !isSeparator(bottom[it].text) }
         val hint =
             (after.map { bottom[it] }.firstOrNull { isHint(it) } ?: before.map { bottom[it] }.firstOrNull { isHint(it) })
                 ?.text
@@ -116,13 +126,13 @@ object PromptParser {
             } ?: return null
         val match = cursor.find(lines[markerRow].text)!!
         val column = match.groups[3]!!.range.first
-        val top = (markerRow downTo 0).firstOrNull { separator.matches(lines[it].text) } ?: -1
+        val top = (markerRow downTo 0).firstOrNull { isSeparator(lines[it].text) } ?: -1
         val bottomEdge =
-            ((markerRow + 1) until lines.size).firstOrNull { separator.matches(lines[it].text) || isHint(lines[it]) } ?: lines.size
+            ((markerRow + 1) until lines.size).firstOrNull { isSeparator(lines[it].text) || isHint(lines[it]) } ?: lines.size
 
         fun isSibling(i: Int): Boolean {
             val l = lines[i]
-            if (l.muted || l.text.isBlank() || isHint(l) || separator.matches(l.text)) return false
+            if (l.muted || l.text.isBlank() || isHint(l) || isSeparator(l.text)) return false
             val col = l.text.indexOfFirst { !it.isWhitespace() }
             return col == column || (
                 cursor
@@ -133,11 +143,25 @@ object PromptParser {
                     ?.first == column
             )
         }
-        val rows = ((top + 1) until bottomEdge).filter { it == markerRow || isSibling(it) }
-        // Siblings must sit together around the cursor, not anywhere in the region.
-        val near = rows.filter { kotlin.math.abs(it - markerRow) <= 2 * rows.size + 2 }
-        if (near.size < 2) return null
-        return near to markerRow
+
+        // Options sit together: walk out from the cursor over siblings and muted descriptions
+        // only. A cursor line whose neighbours are prose (an input box under an answer) is
+        // not a list.
+        // Kimi leaves blank rows between options, so blanks do not end the list.
+        fun describes(i: Int) = lines[i].text.isBlank() || (lines[i].muted && !isHint(lines[i]))
+        val rows = sortedSetOf(markerRow)
+        var i = markerRow - 1
+        while (i > top && (isSibling(i) || describes(i))) {
+            if (isSibling(i)) rows += i
+            i--
+        }
+        i = markerRow + 1
+        while (i < bottomEdge && (isSibling(i) || describes(i))) {
+            if (isSibling(i)) rows += i
+            i++
+        }
+        if (rows.size < 2) return null
+        return rows.toList() to markerRow
     }
 
     private val inputLine = Regex("""^\s*(?:[❯›>]|│\s*>)(?:\s.*)?$""")
@@ -149,7 +173,7 @@ object PromptParser {
         var sawSeparator = false
         for (i in (lastOption + 1) until lines.size) {
             val t = lines[i].text
-            if (separator.matches(t)) {
+            if (isSeparator(t)) {
                 sawSeparator = true
                 continue
             }
@@ -175,7 +199,7 @@ object PromptParser {
         lastOption: Int,
     ): Int =
         ((lastOption + 1) until lines.size)
-            .takeWhile { lines[it].text.isNotBlank() && !isHint(lines[it]) && !separator.matches(lines[it].text) && lines[it].muted }
+            .takeWhile { lines[it].text.isNotBlank() && !isHint(lines[it]) && !isSeparator(lines[it].text) && lines[it].muted }
             .count()
 
     private fun question(
@@ -186,7 +210,7 @@ object PromptParser {
         var blanks = 0
         for (i in (firstOption - 1) downTo maxOf(0, firstOption - 14)) {
             val l = lines[i]
-            if (separator.matches(l.text) || agentOutput.containsMatchIn(l.text)) break
+            if (isSeparator(l.text) || agentOutput.containsMatchIn(l.text)) break
             if (l.text.isBlank()) {
                 if (++blanks >= 2 && picked.isNotEmpty()) break
                 continue
@@ -213,10 +237,15 @@ object PromptParser {
 
     private fun cursorMarked(text: String) = text.trimStart().firstOrNull()?.let { it in "❯›▶>" } == true
 
-    /** Key hints are short or dot-separated ("↑↓ navigate · Enter select"); prose that merely says "choose" is not. */
+    private val keyLead = Regex("""^(?i)(press|enter|esc|tab|↵|↑|↓)\b""")
+
+    /**
+     * Key hints look like "↑↓ navigate · Enter select", "Press enter to continue" or
+     * "Enter to confirm · Esc to cancel". Prose that mentions Esc or "choose" does not count.
+     */
     private fun isHint(l: ScreenLine): Boolean {
         val t = l.text.trim()
         if (t.isEmpty() || !hintWords.containsMatchIn(t)) return false
-        return t.contains('·') || t.startsWith("Press") || t.any { it in "↑↓↵" } || t.length < 45
+        return t.contains('·') || t.any { it in "↑↓↵" } || keyLead.containsMatchIn(t) || (l.muted && t.length < 60)
     }
 }
