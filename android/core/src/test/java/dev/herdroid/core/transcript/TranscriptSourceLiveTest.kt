@@ -72,6 +72,18 @@ class TranscriptSourceLiveTest {
                         }.eachCount()
                 println("    unknown: $unknownTypes")
                 assertTrue(visible.isNotEmpty())
+                val items = dev.herdroid.core.thread.ThreadItems.build(messages.values.toList())
+                println("    items: " + items.groupingBy { it::class.simpleName }.eachCount())
+                if (pane.id == System.getenv("HERDR_PANE_ID")) {
+                    items.takeLast(12).forEach { item ->
+                        val line =
+                            when (item) {
+                                is dev.herdroid.core.thread.ThreadItem.Activity -> "[activity] " + dev.herdroid.core.thread.ToolSummary.summarize(item.tools)
+                                else -> item.toString().take(90)
+                            }
+                        println("      $line")
+                    }
+                }
                 rebuilt++
             }
             assertNotNull(rebuilt)

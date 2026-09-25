@@ -9,6 +9,7 @@ serialization = "1.11.0"
 coroutines = "1.11.0"
 sshj = "0.41.1"
 junit = "4.13.2"
+markdown = "0.45.0"
 slf4j = "2.0.20"
 # Must match the bcutil version sshj pulls in.
 bouncycastle = "1.84"
@@ -32,6 +33,9 @@ sshj = { module = "com.hierynomus:sshj", version.ref = "sshj" }
 androidx-annotation = { module = "androidx.annotation:annotation", version.ref = "annotation" }
 bouncycastle-prov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
 slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
+markdown-m3 = { module = "com.mikepenz:multiplatform-markdown-renderer-m3", version.ref = "markdown" }
+markdown-code = { module = "com.mikepenz:multiplatform-markdown-renderer-code", version.ref = "markdown" }
+compose-material-icons = { module = "androidx.compose.material:material-icons-extended" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]
