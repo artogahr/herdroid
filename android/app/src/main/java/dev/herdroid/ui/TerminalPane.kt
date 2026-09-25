@@ -83,7 +83,12 @@ fun TerminalPane(
                 connected.herdrPath,
                 pane.terminalId ?: pane.id,
                 SessionClient { viewRef[0] },
-                onClosed = { closedReason = it },
+                onClosed = { reason ->
+                    closedReason = reason
+                    // The shell exited: let go of the keyboard now, before the pane is removed
+                    // and Android hands focus (and the keyboard) to the next input field.
+                    viewRef[0]?.let { dropFocus(context, it) }
+                },
             )
         }
     // Removing a focused Android view makes Android search for new focus, which re-enters
@@ -93,7 +98,12 @@ fun TerminalPane(
     }
     DisposableEffect(terminal) {
         closedReason = null
-        onDispose { terminal.close() }
+        onDispose {
+            // When the pane goes away (the shell exited), put the keyboard away with it
+            // instead of leaving it attached to whatever takes focus next.
+            viewRef[0]?.let { dropFocus(context, it) }
+            terminal.close()
+        }
     }
 
     Column(Modifier.fillMaxSize().imePadding()) {
