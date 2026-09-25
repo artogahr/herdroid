@@ -30,21 +30,60 @@ object ToolSummary {
     fun describe(tool: ToolInfo): ToolDescription {
         val name = tool.name.orEmpty()
         val input = tool.input as? JsonObject
+
         fun field(key: String) = (input?.get(key) as? JsonPrimitive)?.contentOrNull
         val rawInput = (tool.input as? JsonPrimitive)?.contentOrNull
         return when (name) {
-            "Bash" -> ToolDescription(ToolVerb.RAN, field("description") ?: field("command"))
-            "Read" -> ToolDescription(ToolVerb.READ, field("file_path")?.fileName())
-            "Edit", "MultiEdit", "NotebookEdit" -> ToolDescription(ToolVerb.EDITED, (field("file_path") ?: field("notebook_path"))?.fileName())
-            "Write" -> ToolDescription(ToolVerb.WROTE, field("file_path")?.fileName())
-            "Grep", "Glob", "WebSearch", "ToolSearch" -> ToolDescription(ToolVerb.SEARCHED, field("pattern") ?: field("query"))
-            "WebFetch" -> ToolDescription(ToolVerb.READ, field("url"))
-            "Agent", "Task" -> ToolDescription(ToolVerb.DELEGATED, field("description"))
-            "exec_command", "shell", "local_shell" -> ToolDescription(ToolVerb.RAN, field("cmd") ?: field("command"))
-            "exec" -> ToolDescription(ToolVerb.RAN, rawInput?.let(::codexCommand) ?: rawInput?.firstLine())
-            "apply_patch" -> ToolDescription(ToolVerb.EDITED, rawInput?.let(::patchFiles) ?: field("input")?.let(::patchFiles))
-            "sleep", "wait" -> ToolDescription(ToolVerb.WAITED, null)
-            else -> ToolDescription(ToolVerb.OTHER, name.ifEmpty { null })
+            "Bash" -> {
+                ToolDescription(ToolVerb.RAN, field("description") ?: field("command"))
+            }
+
+            "Read" -> {
+                ToolDescription(ToolVerb.READ, field("file_path")?.fileName())
+            }
+
+            "Edit", "MultiEdit", "NotebookEdit" -> {
+                ToolDescription(
+                    ToolVerb.EDITED,
+                    (field("file_path") ?: field("notebook_path"))?.fileName(),
+                )
+            }
+
+            "Write" -> {
+                ToolDescription(ToolVerb.WROTE, field("file_path")?.fileName())
+            }
+
+            "Grep", "Glob", "WebSearch", "ToolSearch" -> {
+                ToolDescription(ToolVerb.SEARCHED, field("pattern") ?: field("query"))
+            }
+
+            "WebFetch" -> {
+                ToolDescription(ToolVerb.READ, field("url"))
+            }
+
+            "Agent", "Task" -> {
+                ToolDescription(ToolVerb.DELEGATED, field("description"))
+            }
+
+            "exec_command", "shell", "local_shell" -> {
+                ToolDescription(ToolVerb.RAN, field("cmd") ?: field("command"))
+            }
+
+            "exec" -> {
+                ToolDescription(ToolVerb.RAN, rawInput?.let(::codexCommand) ?: rawInput?.firstLine())
+            }
+
+            "apply_patch" -> {
+                ToolDescription(ToolVerb.EDITED, rawInput?.let(::patchFiles) ?: field("input")?.let(::patchFiles))
+            }
+
+            "sleep", "wait" -> {
+                ToolDescription(ToolVerb.WAITED, null)
+            }
+
+            else -> {
+                ToolDescription(ToolVerb.OTHER, name.ifEmpty { null })
+            }
         }
     }
 
@@ -63,7 +102,12 @@ object ToolSummary {
 
     /** Codex's `exec` tool takes JavaScript; pull out the shell command it runs. */
     private fun codexCommand(js: String): String? =
-        execCmd.find(js)?.groupValues?.get(1)?.replace("\\\"", "\"")?.replace("\\\\", "\\")
+        execCmd
+            .find(js)
+            ?.groupValues
+            ?.get(1)
+            ?.replace("\\\"", "\"")
+            ?.replace("\\\\", "\\")
 
     private fun patchFiles(patch: String): String? =
         Regex("""\*\*\* (?:Update|Add|Delete) File: (.+)""")
