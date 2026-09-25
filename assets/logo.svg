@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="512" height="512">
+  <title>Herdroid</title>
+  <!-- Background square with rounded corners (the launcher masks it on Android). -->
+  <rect width="108" height="108" rx="24" fill="#16302A"/>
+  <!-- Chat bubble with its tail at the bottom left. -->
+  <path fill="#6EE7B7" d="M38 30h32a12 12 0 0 1 12 12v20a12 12 0 0 1-12 12H46l-12 9a1.5 1.5 0 0 1-2.4-1.2V73.4A12 12 0 0 1 26 62V42a12 12 0 0 1 12-12z"/>
+  <!-- Terminal prompt: a chevron and a cursor. -->
+  <path fill="none" stroke="#16302A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" d="M40 45l9 7-9 7"/>
+  <rect x="54" y="56" width="15" height="5" rx="2.5" fill="#16302A"/>
+</svg>
