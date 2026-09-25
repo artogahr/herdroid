@@ -11,26 +11,24 @@ import kotlin.concurrent.thread
 
 /**
  * Lines from a blocking stream. Blocking reads ignore coroutine cancellation, so the reader
- * runs on its own thread and [closeSource] is called when the collector stops, which unblocks it.
+ * runs on its own thread and [closeSource] is called when the collector stops, which unblocks it with EOF.
  */
 fun InputStream.lineFlow(closeSource: () -> Unit): Flow<String> =
     callbackFlow {
-        val reader =
-            thread(isDaemon = true, name = "line-reader") {
-                try {
-                    bufferedReader().use { r ->
-                        while (true) {
-                            val line = r.readLine() ?: break
-                            if (trySendBlocking(line).isFailure) break
-                        }
+        // Never interrupt this thread: it also sends SSH window adjustments, and an interrupted
+        // socket write can leave a partial packet on the connection.
+        thread(isDaemon = true, name = "line-reader") {
+            try {
+                bufferedReader().use { r ->
+                    while (true) {
+                        val line = r.readLine() ?: break
+                        if (trySendBlocking(line).isFailure) break
                     }
-                    channel.close()
-                } catch (e: IOException) {
-                    channel.close(e)
                 }
+                channel.close()
+            } catch (e: IOException) {
+                channel.close(e)
             }
-        awaitClose {
-            closeSource()
-            reader.interrupt()
         }
+        awaitClose { closeSource() }
     }.buffer(64)

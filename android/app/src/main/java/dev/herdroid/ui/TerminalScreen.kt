@@ -1,7 +1,6 @@
 package dev.herdroid.ui
 
 import android.content.Context
-import android.graphics.Typeface
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
@@ -105,7 +104,6 @@ fun TerminalScreen(
                 factory = { ctx ->
                     TerminalView(ctx, null).apply {
                         setTerminalViewClient(viewClient)
-                        setTypeface(Typeface.MONOSPACE)
                         setTextSize((12 * ctx.resources.displayMetrics.scaledDensity).toInt())
                         isFocusable = true
                         isFocusableInTouchMode = true

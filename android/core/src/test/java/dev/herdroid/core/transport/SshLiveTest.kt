@@ -3,9 +3,15 @@ package dev.herdroid.core.transport
 import dev.herdroid.core.herdr.HerdrApi
 import dev.herdroid.core.model.AgentKind
 import dev.herdroid.core.transcript.TranscriptSource
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -49,6 +55,9 @@ class SshLiveTest {
                     // Several channels on one connection, as the app uses them.
                     val again = List(5) { api.snapshot() }
                     assertTrue(again.all { it.protocol == 22 })
+                    // The app issues requests concurrently from several screens.
+                    val concurrent = coroutineScope { List(8) { async(Dispatchers.IO) { api.snapshot() } }.awaitAll() }
+                    assertTrue(concurrent.all { it.protocol == 22 })
                     val pane = snapshot.panes.first { it.agentStatus != null }
                     val sub =
                         buildJsonObject {
@@ -65,9 +74,32 @@ class SshLiveTest {
                     assertEquals(50, lines.size)
                     println("followed ${lines.size} lines of ${agent.id}, offset ${lines.last().endOffset}")
                     val frame =
-                        ssh.exec("$herdr terminal session observe ${agent.terminalId} --cols 80 --rows 24").use { it.lines.first() }
+                        ssh
+                            .exec(
+                                "$herdr terminal session observe ${agent.terminalId} --cols 80 --rows 24",
+                                stopOnEof = true,
+                            ).use { it.lines.first() }
                     assertTrue(frame, frame.contains("\"terminal.frame\""))
                     println("terminal frame: ${frame.take(80)}")
+                    // Stream the largest transcript to its end while other requests run, like the thread screen.
+                    val big =
+                        snapshot.panes
+                            .filter { it.agentSession?.agent == "claude" }
+                            .mapNotNull { p -> source.locate(AgentKind.CLAUDE, p.agentSession!!.value, p.cwd) }
+                            .maxBy { ssh.run("wc -c < '$it'").trim().toLong() }
+                    val size = source.size(big)
+                    var streamed = 0
+                    coroutineScope {
+                        val polling = launch(Dispatchers.IO) { repeat(20) { api.snapshot() } }
+                        source
+                            .followRecent(big)
+                            .takeWhile {
+                                streamed++
+                                it.endOffset < size
+                            }.collect {}
+                        polling.join()
+                    }
+                    println("streamed the recent end of $size bytes: $streamed lines")
                     val out = ssh.run("echo hi")
                     assertEquals("hi\n", out)
                 }

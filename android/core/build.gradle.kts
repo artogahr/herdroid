@@ -23,5 +23,6 @@ dependencies {
     api(libs.sshj)
     implementation(libs.bouncycastle.prov)
     testImplementation(libs.junit)
+    testImplementation(libs.slf4j.simple)
     testImplementation(libs.kotlinx.coroutines.test)
 }
