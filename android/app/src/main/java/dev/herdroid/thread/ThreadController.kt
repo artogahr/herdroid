@@ -73,6 +73,7 @@ class ThreadController(
         private set
     var answering by mutableStateOf(false)
         private set
+    private var lastSeenSignature: String? = null
     var answerError by mutableStateOf<String?>(null)
         private set
     var loadError by mutableStateOf<String?>(null)
@@ -402,8 +403,18 @@ class ThreadController(
     private suspend fun refreshPrompt() {
         val screen = readScreen()
         val parsed = screen?.let { PromptParser.parse(AnsiScreen.parse(it)) }
-        // Without a key hint, a parsed list is only trusted while herdr says blocked.
-        prompt = parsed?.takeIf { status == AgentStatus.BLOCKED || it.hint != null }
+        // herdr saying "blocked" is enough. Otherwise (it misses some prompts) the same
+        // question with a key hint must be on screen twice in a row, so a screen that only
+        // looks like a question for a moment, such as streaming output, never shows a card.
+        val stable = parsed != null && parsed.signature == lastSeenSignature
+        lastSeenSignature = parsed?.signature
+        prompt =
+            when {
+                parsed == null || status == AgentStatus.WORKING -> null
+                status == AgentStatus.BLOCKED -> parsed
+                parsed.hint != null && stable -> parsed
+                else -> null
+            }
         blockedPrompt =
             if (status == AgentStatus.BLOCKED) {
                 screen?.let { promptTail(AnsiScreen.parse(it).joinToString("\n") { l -> l.text }) }
