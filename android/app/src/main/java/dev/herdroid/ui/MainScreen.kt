@@ -2,6 +2,8 @@ package dev.herdroid.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,6 +49,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,6 +63,7 @@ import dev.herdroid.data.ConnectionState
 import dev.herdroid.data.HerdrSession
 import dev.herdroid.thread.ThreadController
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -235,7 +241,11 @@ fun MainScreen(
                             state = pager,
                             // The list can shrink under the pager when a pane closes mid-swipe.
                             key = { stablePages.getOrNull(it)?.id ?: "gone-$it" },
-                            modifier = Modifier.fillMaxSize(),
+                            modifier =
+                                Modifier.fillMaxSize().swipeRightAtStart(pager) {
+                                    focus.clearFocus(force = true)
+                                    scope.launch { drawer.open() }
+                                },
                         ) { page ->
                             val pane = stablePages.getOrNull(page) ?: return@HorizontalPager
                             if (terminalMode[pane.id] == true || !pane.hasChat) {
@@ -353,3 +363,37 @@ private fun TerminalPlaceholder(pane: Pane) {
         }
     }
 }
+
+/**
+ * Swiping right on the first pane, where the pager cannot go further back, opens the side
+ * panel. Watches in the Initial pass so terminals (Android views) cannot swallow the drag,
+ * and never consumes: the pager has nothing to scroll there anyway.
+ */
+private fun Modifier.swipeRightAtStart(
+    pager: PagerState,
+    onSwipe: () -> Unit,
+): Modifier =
+    pointerInput(pager) {
+        val slop = viewConfiguration.touchSlop
+        val threshold = 56.dp.toPx()
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            if (pager.canScrollBackward) return@awaitEachGesture
+            var dx = 0f
+            var dy = 0f
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (!change.pressed) break
+                val delta = change.positionChange()
+                dx += delta.x
+                dy += delta.y
+                if (abs(dy) > slop && abs(dy) > abs(dx)) break
+                if (dx < -slop) break
+                if (dx > threshold && dx > 2 * abs(dy)) {
+                    onSwipe()
+                    break
+                }
+            }
+        }
+    }
