@@ -102,39 +102,50 @@ fun MainScreen(
 
     val selected = snapshot?.let { snap -> snap.panes.firstOrNull { it.id == selectedId } ?: defaultPane(snap) }
     val pages = selected?.let { snapshot.swipeOrder(it.workspaceId) }.orEmpty()
-    val latestPages by rememberUpdatedState(pages)
-    // One pager per space. Scrolling one pager across different page sets crashed Compose
-    // ("LayoutCoordinate operations are only valid when isAttached") when focus moved back
-    // from the drawer mid-change.
+    // Crash family "LayoutCoordinate operations are only valid when isAttached" / "LayoutNode
+    // should be attached to an owner": the pager was force-remeasured while its pages were
+    // changing. Two triggers: removing a focused view (the terminal) makes Android search for
+    // focus, which re-enters Compose and re-lays out the pager mid-removal; and scrollToPage
+    // during page-list churn. So: no focus inside pages while they change, navigate only on
+    // a new selection, and freeze the page list while a swipe is in progress.
     val workspaceId = selected?.workspaceId
+    val stablePagesState = remember(workspaceId) { mutableStateOf(pages) }
+    var stablePages by stablePagesState
     val pager =
         remember(workspaceId) {
-            PagerState(currentPage = pages.indexOfFirst { it.id == selected?.id }.coerceAtLeast(0)) { latestPages.size }
+            PagerState(currentPage = pages.indexOfFirst { it.id == selected?.id }.coerceAtLeast(0)) { stablePagesState.value.size }
         }
+    LaunchedEffect(pages, pager.isScrollInProgress) {
+        if (!pager.isScrollInProgress) stablePages = pages
+    }
     val focus = LocalFocusManager.current
+    LaunchedEffect(pager.isScrollInProgress) {
+        if (pager.isScrollInProgress) focus.clearFocus(force = true)
+    }
+    LaunchedEffect(stablePages.map { it.id }) { focus.clearFocus(force = true) }
 
-    // Opening a pane from the side panel scrolls the pager to it.
-    LaunchedEffect(selected?.id, pages.size) {
-        val index = pages.indexOfFirst { it.id == selected?.id }
-        if (index >= 0 && index != pager.currentPage) pager.scrollToPage(index)
+    // Opening a pane from the side panel moves the pager to it.
+    LaunchedEffect(selected?.id) {
+        val index = stablePages.indexOfFirst { it.id == selected?.id }
+        if (index >= 0 && index != pager.currentPage && !pager.isScrollInProgress) pager.scrollToPage(index)
     }
     // Swiping selects the pane that settles on screen.
-    LaunchedEffect(pages) {
+    LaunchedEffect(stablePages) {
         snapshotFlow { pager.settledPage }.collect { page ->
-            pages.getOrNull(page)?.let {
+            stablePages.getOrNull(page)?.let {
                 selectedId = it.id
                 connection.lastPaneId = it.id
             }
         }
     }
 
-    val current = pages.getOrNull(pager.currentPage) ?: selected
+    val current = stablePages.getOrNull(pager.currentPage) ?: selected
 
     // Only the pane on screen streams; the rest keep what they already loaded.
-    val settledId = pages.getOrNull(pager.settledPage)?.id
+    val settledId = stablePages.getOrNull(pager.settledPage)?.id
     LaunchedEffect(settledId, live) {
         threads.forEach { (id, thread) -> if (id != settledId) thread.deactivate() }
-        if (live) pages.getOrNull(pager.settledPage)?.takeIf { it.hasChat }?.let { threadFor(it).activate() }
+        if (live) stablePages.getOrNull(pager.settledPage)?.takeIf { it.hasChat }?.let { threadFor(it).activate() }
     }
     val showTerminal = current != null && (terminalMode[current.id] == true || !current.hasChat)
 
@@ -178,7 +189,11 @@ fun MainScreen(
                     title = { current?.let { PaneTitle(it, snapshot, threads[it.id]?.title) } },
                     actions = {
                         if (current?.hasChat == true) {
-                            IconButton(onClick = { terminalMode[current.id] = !showTerminal }) {
+                            IconButton(onClick = {
+                                // The toggle swaps the composer for a focusable terminal view.
+                                focus.clearFocus(force = true)
+                                terminalMode[current.id] = !showTerminal
+                            }) {
                                 Icon(
                                     if (showTerminal) Icons.AutoMirrored.Filled.Chat else Icons.Filled.Terminal,
                                     if (showTerminal) "Chat" else "Terminal",
@@ -191,7 +206,7 @@ fun MainScreen(
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
                 AnimatedVisibility(reconnecting != null) { ReconnectBanner(reconnecting) }
-                if (pages.size > 1) PageDots(pages, pager.currentPage)
+                if (stablePages.size > 1) PageDots(stablePages, pager.currentPage)
                 when {
                     snapshot == null -> {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -204,25 +219,26 @@ fun MainScreen(
                     }
 
                     else -> {
-                        key(workspaceId) {
-                            HorizontalPager(
-                                state = pager,
-                                // The list can shrink under the pager when a pane closes mid-swipe.
-                                key = { latestPages.getOrNull(it)?.id ?: "gone-$it" },
-                                modifier = Modifier.fillMaxSize(),
-                            ) { page ->
-                                val pane = latestPages.getOrNull(page) ?: return@HorizontalPager
-                                if (terminalMode[pane.id] == true || !pane.hasChat) {
-                                    // The terminal is an Android View; the pager crashes placing one
-                                    // that scrolls in or out, so only the settled page gets a live one.
-                                    if (page == pager.settledPage && !pager.isScrollInProgress) {
-                                        TerminalPane(connected, pane)
-                                    } else {
-                                        TerminalPlaceholder(pane)
-                                    }
+                        HorizontalPager(
+                            state = pager,
+                            // The list can shrink under the pager when a pane closes mid-swipe.
+                            key = { stablePages.getOrNull(it)?.id ?: "gone-$it" },
+                            modifier = Modifier.fillMaxSize(),
+                        ) { page ->
+                            val pane = stablePages.getOrNull(page) ?: return@HorizontalPager
+                            if (terminalMode[pane.id] == true || !pane.hasChat) {
+                                // Swapped out only once the page stops being current: by then
+                                // the swipe start has already made the terminal drop focus.
+                                if (page == pager.currentPage) {
+                                    TerminalPane(connected, pane, swiping = pager.isScrollInProgress)
                                 } else {
-                                    ThreadPane(threadFor(pane), onOpenTerminal = { terminalMode[pane.id] = true })
+                                    TerminalPlaceholder(pane)
                                 }
+                            } else {
+                                ThreadPane(threadFor(pane), onOpenTerminal = {
+                                    focus.clearFocus(force = true)
+                                    terminalMode[pane.id] = true
+                                })
                             }
                         }
                     }
