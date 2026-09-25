@@ -50,7 +50,7 @@ fun ConnectScreen(
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
-    val pubkey = remember { connection.authorizedKeysLine }
+    val pubkey = remember { connection.authorizedKeysLine.also { android.util.Log.i("Herdroid", "public key: $it") } }
 
     Scaffold { padding ->
         Column(
