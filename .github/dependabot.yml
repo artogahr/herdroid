@@ -13,3 +13,6 @@ updates:
         patterns: ['androidx.*', 'com.android.*']
       kotlin:
         patterns: ['org.jetbrains.kotlin*']
+    ignore:
+      # Must match the bcutil version that sshj depends on; bump it together with sshj.
+      - dependency-name: org.bouncycastle:bcprov-jdk18on
