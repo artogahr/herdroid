@@ -2,7 +2,14 @@
 
 ## Unreleased
 
+## 0.2.0
+
 - A + button next to the page dots opens a new tab in the current space. It lists the agent CLIs herdr finds on the server, with the last one you used first, and a Terminal button for a plain shell.
+  - Agents get a free name, such as `codex-2`.
+  - A terminal tab opens in control, ready to type.
+  - If an agent fails to start, its tab closes again. If it starts but asks something first, such as trusting the folder, the tab stays open to answer in the terminal.
+- Starting an agent in a terminal you control, for example by typing `claude`, no longer crashes the app. You stay in the terminal and switch to the chat from the top bar.
+- A new Claude session shows "Send a message to start" instead of an empty screen.
 
 ## 0.1.0
 
