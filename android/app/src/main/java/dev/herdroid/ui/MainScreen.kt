@@ -69,6 +69,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.herdroid.core.herdr.AgentStatus
+import dev.herdroid.core.herdr.HerdrApiException
 import dev.herdroid.core.herdr.Launcher
 import dev.herdroid.core.herdr.Launchers
 import dev.herdroid.core.herdr.Pane
@@ -81,6 +82,7 @@ import dev.herdroid.data.HerdrActions
 import dev.herdroid.data.HerdrSession
 import dev.herdroid.thread.ThreadController
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -237,25 +239,36 @@ fun MainScreen(
     ) {
         if (launching != null) return
         launching = launcher?.kind ?: TERMINAL
+        val previous = selectedId
         scope.launch {
             try {
-                val paneId = actions.createTab(workspaceId, folder) ?: error("herdr did not return the new tab")
-                if (launcher == null) autoControl[paneId] = false
-                selectedId = paneId
-                connection.lastPaneId = paneId
+                val tab = actions.createTab(workspaceId, folder) ?: error("herdr did not return the new tab")
+                if (launcher == null) autoControl[tab.paneId] = false
+                selectedId = tab.paneId
+                connection.lastPaneId = tab.paneId
                 newTab = null
                 session.refreshNow()
                 if (launcher != null) {
                     prefs.updateLastAgentKind(launcher.kind)
-                    val taken =
-                        latestSnapshot
-                            ?.panes
-                            ?.mapNotNull { it.name }
-                            ?.toSet()
-                            .orEmpty()
-                    actions.startAgent(paneId, launcher.kind, Launchers.freeName(launcher.kind, taken))
+                    try {
+                        actions.startAgent(tab.paneId, launcher.kind)
+                    } catch (e: HerdrApiException) {
+                        // The agent started but stopped at a question, such as trusting the
+                        // folder: keep the tab so it can be answered in the terminal.
+                        if (e.code == "agent_not_ready") {
+                            snackbar.showSnackbar("${launcher.label} is waiting for an answer in the terminal.")
+                            return@launch
+                        }
+                        // Nothing started: don't leave an empty shell behind.
+                        runCatching { actions.closeTab(tab.tabId) }
+                        selectedId = previous
+                        connection.lastPaneId = previous
+                        throw e
+                    }
                     session.refreshNow()
                 }
+            } catch (e: TimeoutCancellationException) {
+                snackbar.showSnackbar("${launcher?.label ?: "The terminal"} is taking long to start. It may still come up.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
