@@ -216,7 +216,10 @@ fun MainScreen(
 
     // Only the pane on screen streams; the rest keep what they already loaded.
     val settledId = stablePages.getOrNull(pager.settledPage)?.id
-    LaunchedEffect(settledId, live) {
+    // A tab started from the phone settles as a shell and gains its chat once herdr detects
+    // the agent, without the settled page changing.
+    val settledHasChat = stablePages.getOrNull(pager.settledPage)?.hasChat == true
+    LaunchedEffect(settledId, settledHasChat, live) {
         threads.forEach { (id, thread) -> if (id != settledId) thread.deactivate() }
         if (live) stablePages.getOrNull(pager.settledPage)?.takeIf { it.hasChat }?.let { threadFor(it).activate() }
     }
