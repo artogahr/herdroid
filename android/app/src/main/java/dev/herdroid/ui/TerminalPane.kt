@@ -53,12 +53,15 @@ fun TerminalPane(
     connected: ConnectionState.Connected,
     pane: Pane,
     swiping: Boolean = false,
+    /** Start typing right away, for a tab the phone just opened: nobody else is using it. */
+    startInControl: Boolean = false,
+    onControlTaken: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var closedReason by remember { mutableStateOf<String?>(null) }
     var attempt by remember { mutableStateOf(0) }
-    var control by remember { mutableStateOf(false) }
+    var control by remember { mutableStateOf(startInControl) }
     var confirmControl by remember { mutableStateOf(false) }
     var ctrl by remember { mutableStateOf(false) }
     val viewRef = remember { arrayOfNulls<TerminalView>(1) }
@@ -95,6 +98,12 @@ fun TerminalPane(
     // Compose and re-lays out the pager mid-removal (the pager crash). Let go first.
     LaunchedEffect(swiping) {
         if (swiping) viewRef[0]?.let { dropFocus(context, it) }
+    }
+    LaunchedEffect(terminal) {
+        if (control) {
+            terminal.setControl(true)
+            onControlTaken()
+        }
     }
     DisposableEffect(terminal) {
         closedReason = null

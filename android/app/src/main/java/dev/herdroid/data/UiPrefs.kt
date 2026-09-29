@@ -4,10 +4,11 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 
-/** Display preferences the user changes by gesture; remembered across launches. */
+/** Small preferences the app picks up from use; remembered across launches. */
 class UiPrefs(
     context: Context,
 ) {
@@ -20,6 +21,15 @@ class UiPrefs(
     /** Terminal font size in sp, changed by pinching the terminal. */
     var terminalTextSize by mutableIntStateOf(prefs.getInt("terminalTextSize", 11))
         private set
+
+    /** The agent kind last started from the phone, offered first next time. */
+    var lastAgentKind by mutableStateOf(prefs.getString("lastAgentKind", null))
+        private set
+
+    fun updateLastAgentKind(kind: String) {
+        lastAgentKind = kind
+        prefs.edit { putString("lastAgentKind", kind) }
+    }
 
     fun updateChatTextScale(scale: Float) {
         chatTextScale = scale.coerceIn(MIN_CHAT_SCALE, MAX_CHAT_SCALE)

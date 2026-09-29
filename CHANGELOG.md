@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A + button next to the page dots opens a new tab in the current space. It lists the agent CLIs herdr finds on the server, with the last one you used first, and a Terminal button for a plain shell.
+
 ## 0.1.0
 
 The first public release.

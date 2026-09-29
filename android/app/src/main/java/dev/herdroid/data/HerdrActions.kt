@@ -1,6 +1,8 @@
 package dev.herdroid.data
 
 import dev.herdroid.core.herdr.HerdrApi
+import dev.herdroid.core.herdr.Launcher
+import dev.herdroid.core.herdr.Launchers
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -31,6 +33,48 @@ class HerdrActions(
             ?.content
     }
 
+    /** The agent CLIs herdr finds on the server. */
+    suspend fun launchers(): List<Launcher> = Launchers.fromIntegrations(api.request("integration.list"))
+
+    /** Opens a tab in the space and returns its pane, a shell in [folder]. */
+    suspend fun createTab(
+        workspaceId: String,
+        folder: String?,
+    ): String? {
+        val result =
+            api.request(
+                "tab.create",
+                buildJsonObject {
+                    put("workspace_id", workspaceId)
+                    folder?.takeIf { it.isNotBlank() }?.let { put("cwd", it) }
+                    put("focus", false)
+                },
+            )
+        return result["root_pane"]
+            ?.jsonObject
+            ?.get("pane_id")
+            ?.jsonPrimitive
+            ?.content
+    }
+
+    /** Starts an agent in a shell pane. herdr answers once the agent is ready for input. */
+    suspend fun startAgent(
+        paneId: String,
+        kind: String,
+        name: String,
+    ) {
+        api.request(
+            "agent.start",
+            buildJsonObject {
+                put("name", name)
+                put("kind", kind)
+                put("pane_id", paneId)
+                put("timeout_ms", AGENT_START_TIMEOUT_MS)
+            },
+            timeoutMs = AGENT_START_TIMEOUT_MS + 10_000,
+        )
+    }
+
     suspend fun renameSpace(
         workspaceId: String,
         name: String,
@@ -56,5 +100,9 @@ class HerdrActions(
                 if (name.isBlank()) put("label", kotlinx.serialization.json.JsonNull) else put("label", name.trim())
             },
         )
+    }
+
+    private companion object {
+        const val AGENT_START_TIMEOUT_MS = 30_000L
     }
 }

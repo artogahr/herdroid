@@ -83,6 +83,7 @@ must be on the `PATH` that your shell sets up at login.
 | --- | --- |
 | Open spaces and agents | Tap the menu button, or swipe right from the first pane |
 | Switch panes | Swipe left or right |
+| Start an agent or a terminal | Tap **+** next to the page dots and pick one |
 | Switch between chat and terminal | Tap the icon at the top right |
 | Answer a question | Tap a choice on the card above the message box |
 | Stop the agent | Tap the stop button while it is working |

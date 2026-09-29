@@ -36,10 +36,11 @@ class HerdrApi(
     suspend fun request(
         method: String,
         params: JsonObject = JsonObject(emptyMap()),
+        timeoutMs: Long = REQUEST_TIMEOUT_MS,
     ): JsonObject {
         val id = "h${ids.incrementAndGet()}"
         // A bridge that dies without answering would otherwise hang the caller forever.
-        return withTimeout(REQUEST_TIMEOUT_MS) {
+        return withTimeout(timeoutMs) {
             transport.exec(bridge).use { channel ->
                 channel.write(requestLine(id, method, params))
                 unwrap(json.parseToJsonElement(channel.lines.first()).jsonObject)

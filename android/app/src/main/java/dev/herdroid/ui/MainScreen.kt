@@ -2,6 +2,7 @@ package dev.herdroid.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -12,14 +13,17 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
@@ -28,8 +32,12 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,6 +47,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,14 +70,18 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.herdroid.core.herdr.AgentStatus
+import dev.herdroid.core.herdr.Launcher
+import dev.herdroid.core.herdr.Launchers
 import dev.herdroid.core.herdr.Pane
 import dev.herdroid.core.herdr.Snapshot
 import dev.herdroid.core.herdr.Workspace
+import dev.herdroid.core.model.AgentKind
 import dev.herdroid.data.Connection
 import dev.herdroid.data.ConnectionState
 import dev.herdroid.data.HerdrActions
 import dev.herdroid.data.HerdrSession
 import dev.herdroid.thread.ThreadController
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -107,6 +120,15 @@ fun MainScreen(
     var selectedId by remember { mutableStateOf(connection.lastPaneId) }
     // Per pane: show the terminal instead of the chat.
     val terminalMode = remember { mutableStateMapOf<String, Boolean>() }
+    val snackbar = remember { SnackbarHostState() }
+    val prefs = uiPrefs()
+    var newTab by remember { mutableStateOf<NewTab?>(null) }
+    // Loaded when the sheet opens; the last list shows while it refreshes.
+    var launchers by remember(connected) { mutableStateOf<List<Launcher>?>(null) }
+    var launchersError by remember { mutableStateOf<String?>(null) }
+    var launching by remember { mutableStateOf<String?>(null) }
+    // Terminal tabs opened from the phone start in control: nobody else is using them yet.
+    val autoControl = remember { mutableStateListOf<String>() }
 
     val latestSnapshot by rememberUpdatedState(snapshot)
 
@@ -200,6 +222,44 @@ fun MainScreen(
     }
     val showTerminal = current != null && (terminalMode[current.id] == true || !current.hasChat)
 
+    /** Opens a tab in the space and starts [launcher] in it, or leaves a shell when null. */
+    fun launch(
+        workspaceId: String,
+        folder: String?,
+        launcher: Launcher?,
+    ) {
+        if (launching != null) return
+        launching = launcher?.kind ?: TERMINAL
+        scope.launch {
+            try {
+                val paneId = actions.createTab(workspaceId, folder) ?: error("herdr did not return the new tab")
+                if (launcher == null) autoControl += paneId
+                selectedId = paneId
+                connection.lastPaneId = paneId
+                newTab = null
+                session.refreshNow()
+                if (launcher != null) {
+                    prefs.updateLastAgentKind(launcher.kind)
+                    val taken =
+                        latestSnapshot
+                            ?.panes
+                            ?.mapNotNull { it.name }
+                            ?.toSet()
+                            .orEmpty()
+                    actions.startAgent(paneId, launcher.kind, Launchers.freeName(launcher.kind, taken))
+                    session.refreshNow()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val what = launcher?.label ?: "a terminal"
+                snackbar.showSnackbar("Could not start $what: ${e.message ?: e::class.simpleName}")
+            } finally {
+                launching = null
+            }
+        }
+    }
+
     SideDrawer(
         state = drawer,
         drawerContent = {
@@ -229,6 +289,7 @@ fun MainScreen(
         },
     ) {
         Scaffold(
+            snackbarHost = { SnackbarHost(snackbar) },
             topBar = {
                 TopAppBar(
                     navigationIcon = {
@@ -266,7 +327,12 @@ fun MainScreen(
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
                 AnimatedVisibility(reconnecting != null) { ReconnectBanner(reconnecting) }
-                if (stablePages.size > 1) PageDots(stablePages, pager.currentPage)
+                if (current != null) {
+                    PageDots(stablePages, pager.currentPage, onNewTab = {
+                        focus.clearFocus(force = true)
+                        newTab = NewTab(current.workspaceId, current.foregroundCwd ?: current.cwd)
+                    })
+                }
                 when {
                     snapshot == null -> {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -293,7 +359,13 @@ fun MainScreen(
                                 // Swapped out only once the page stops being current: by then
                                 // the swipe start has already made the terminal drop focus.
                                 if (page == pager.currentPage) {
-                                    TerminalPane(connected, pane, swiping = pager.isScrollInProgress)
+                                    TerminalPane(
+                                        connected,
+                                        pane,
+                                        swiping = pager.isScrollInProgress,
+                                        startInControl = pane.id in autoControl,
+                                        onControlTaken = { autoControl.remove(pane.id) },
+                                    )
                                 } else {
                                     TerminalPlaceholder(pane)
                                 }
@@ -308,6 +380,28 @@ fun MainScreen(
                 }
             }
         }
+    }
+    newTab?.let { request ->
+        LaunchedEffect(request) {
+            launchersError = null
+            runCatching { actions.launchers() }
+                .onSuccess { launchers = it }
+                .onFailure { if (launchers == null) launchersError = it.message ?: "Could not list agents" }
+        }
+        NewTabSheet(
+            space =
+                snapshot
+                    ?.workspaces
+                    ?.firstOrNull { it.id == request.workspaceId }
+                    ?.label
+                    .orEmpty(),
+            folder = request.folder.orEmpty(),
+            launchers = launchers?.let { Launchers.sorted(it, prefs.lastAgentKind, chatKinds) },
+            error = launchersError,
+            launching = launching,
+            onLaunch = { launcher, folder -> launch(request.workspaceId, folder.trim().ifBlank { null }, launcher) },
+            onDismiss = { if (launching == null) newTab = null },
+        )
     }
     dialog?.let { d ->
         NameDialogView(
@@ -394,27 +488,161 @@ private fun PaneTitle(
     }
 }
 
-/** Where you are in the space: one dot per pane, with a gap between tabs. */
+/** Where you are in the space: one dot per pane, with a gap between tabs, and a new tab button. */
 @Composable
 private fun PageDots(
     pages: List<Pane>,
     current: Int,
+    onNewTab: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(bottom = 4.dp),
+        Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        pages.forEachIndexed { i, pane ->
-            if (i > 0 && pages[i - 1].tabId != pane.tabId) Spacer(Modifier.width(8.dp))
-            val color = if (i == current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-            Box(
-                Modifier
-                    .padding(horizontal = 3.dp)
-                    .size(if (i == current) 8.dp else 6.dp)
-                    .clip(CircleShape)
-                    .background(color),
+        if (pages.size > 1) {
+            pages.forEachIndexed { i, pane ->
+                if (i > 0 && pages[i - 1].tabId != pane.tabId) Spacer(Modifier.width(8.dp))
+                val color = if (i == current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                Box(
+                    Modifier
+                        .padding(horizontal = 3.dp)
+                        .size(if (i == current) 8.dp else 6.dp)
+                        .clip(CircleShape)
+                        .background(color),
+                )
+            }
+            Spacer(Modifier.width(6.dp))
+        }
+        Box(
+            Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onNewTab),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.Add, "New tab", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+private const val TERMINAL = "terminal"
+
+private val chatKinds = AgentKind.entries.map { it.name.lowercase() }.toSet()
+
+private data class NewTab(
+    val workspaceId: String,
+    val folder: String?,
+)
+
+/** Pick what the new tab runs: an agent herdr found on the server, or a plain terminal. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NewTabSheet(
+    space: String,
+    folder: String,
+    launchers: List<Launcher>?,
+    error: String?,
+    launching: String?,
+    onLaunch: (Launcher?, String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var path by remember { mutableStateOf(folder) }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.padding(horizontal = 24.dp).padding(bottom = 16.dp).navigationBarsPadding(),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(if (space.isBlank()) "New tab" else "New tab in $space", style = MaterialTheme.typography.titleLarge)
+            OutlinedTextField(
+                path,
+                { path = it },
+                label = { Text("Folder on the server") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
             )
+            when {
+                launchers == null && error == null -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text("Looking for agents…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+
+                launchers.isNullOrEmpty() -> {
+                    Text(
+                        error ?: "herdr found no agent CLIs on this server.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                else -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        launchers.chunked(2).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                row.forEach { launcher ->
+                                    LauncherButton(
+                                        launcher,
+                                        busy = launching == launcher.kind,
+                                        enabled = launching == null,
+                                        onClick = { onLaunch(launcher, path) },
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                if (row.size == 1) Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+            OutlinedButton(
+                onClick = { onLaunch(null, path) },
+                enabled = launching == null,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (launching == TERMINAL) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Filled.Terminal, null, Modifier.size(18.dp))
+                }
+                Spacer(Modifier.width(8.dp))
+                Text("Terminal")
+            }
+        }
+    }
+}
+
+@Composable
+private fun LauncherButton(
+    launcher: Launcher,
+    busy: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = modifier,
+    ) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (busy) {
+                Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                }
+            } else {
+                AgentAvatar(launcher.kind, size = 32.dp)
+            }
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text(launcher.label, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    if (launcher.kind in chatKinds) "Chat" else "Terminal",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
