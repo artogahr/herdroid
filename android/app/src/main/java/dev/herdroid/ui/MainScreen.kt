@@ -47,7 +47,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -128,7 +127,8 @@ fun MainScreen(
     var launchersError by remember { mutableStateOf<String?>(null) }
     var launching by remember { mutableStateOf<String?>(null) }
     // Terminal tabs opened from the phone start in control: nobody else is using them yet.
-    val autoControl = remember { mutableStateListOf<String>() }
+    // Keyed by pane, true once it has been on screen; cleared when you swipe away.
+    val autoControl = remember { mutableStateMapOf<String, Boolean>() }
 
     val latestSnapshot by rememberUpdatedState(snapshot)
 
@@ -220,6 +220,10 @@ fun MainScreen(
         threads.forEach { (id, thread) -> if (id != settledId) thread.deactivate() }
         if (live) stablePages.getOrNull(pager.settledPage)?.takeIf { it.hasChat }?.let { threadFor(it).activate() }
     }
+    LaunchedEffect(settledId) {
+        autoControl.keys.filter { it != settledId && autoControl[it] == true }.forEach { autoControl.remove(it) }
+        if (settledId != null && settledId in autoControl) autoControl[settledId] = true
+    }
     val showTerminal = current != null && (terminalMode[current.id] == true || !current.hasChat)
 
     /** Opens a tab in the space and starts [launcher] in it, or leaves a shell when null. */
@@ -233,7 +237,7 @@ fun MainScreen(
         scope.launch {
             try {
                 val paneId = actions.createTab(workspaceId, folder) ?: error("herdr did not return the new tab")
-                if (launcher == null) autoControl += paneId
+                if (launcher == null) autoControl[paneId] = false
                 selectedId = paneId
                 connection.lastPaneId = paneId
                 newTab = null
@@ -364,7 +368,6 @@ fun MainScreen(
                                         pane,
                                         swiping = pager.isScrollInProgress,
                                         startInControl = pane.id in autoControl,
-                                        onControlTaken = { autoControl.remove(pane.id) },
                                     )
                                 } else {
                                     TerminalPlaceholder(pane)

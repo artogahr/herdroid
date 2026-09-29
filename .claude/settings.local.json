@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/private/tmp/claude-501/-Users-artogahr-workplace-herdroid/5560d326-c0e9-4661-85c8-33c059b37970/scratchpad/emu/sdk/libexec/android-sdk/platform-tools/adb devices *)",
+      "Bash(python3 -c ' *)"
+    ]
+  }
+}
