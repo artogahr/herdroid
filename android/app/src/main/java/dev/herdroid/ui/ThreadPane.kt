@@ -144,7 +144,11 @@ fun ThreadPane(
                     ),
             ) {
                 ScaledText(pinch.liveScale ?: prefs.chatTextScale) { Conversation(thread) }
-                if (thread.awaitingFirstMessage && thread.items.isEmpty() && thread.outgoing.isEmpty()) {
+                // A new session either has no transcript yet (Codex) or one with only setup
+                // records (Claude): both are an empty chat, not a loading one.
+                val empty = thread.items.isEmpty() && thread.outgoing.isEmpty()
+                val loadedEmpty = !thread.loading && thread.loadError == null && !thread.hasOlder
+                if (empty && (thread.awaitingFirstMessage || loadedEmpty)) {
                     Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         AgentAvatar(pane.agent, size = 56.dp)
                         Spacer(Modifier.size(12.dp))

@@ -121,6 +121,10 @@ fun MainScreen(
     var selectedId by remember { mutableStateOf(connection.lastPaneId) }
     // Per pane: show the terminal instead of the chat.
     val terminalMode = remember { mutableStateMapOf<String, Boolean>() }
+    // Panes whose terminal you are typing in. An agent started there (`claude` typed into a
+    // shell) leaves you in the terminal: switching to the chat would remove the focused
+    // terminal view, which is the pager crash described below.
+    val controlling = remember { mutableStateMapOf<String, Boolean>() }
     val snackbar = remember { SnackbarHostState() }
     val prefs = uiPrefs()
     var newTab by remember { mutableStateOf<NewTab?>(null) }
@@ -229,7 +233,9 @@ fun MainScreen(
         autoControl.keys.filter { it != settledId && autoControl[it] == true }.forEach { autoControl.remove(it) }
         if (settledId != null && settledId in autoControl) autoControl[settledId] = true
     }
-    val showTerminal = current != null && (terminalMode[current.id] == true || !current.hasChat)
+
+    fun asTerminal(pane: Pane) = terminalMode[pane.id] == true || !pane.hasChat || controlling[pane.id] == true
+    val showTerminal = current != null && asTerminal(current)
 
     /** Opens a tab in the space and starts [launcher] in it, or leaves a shell when null. */
     fun launch(
@@ -333,6 +339,7 @@ fun MainScreen(
                             IconButton(onClick = {
                                 // The toggle swaps the composer for a focusable terminal view.
                                 focus.clearFocus(force = true)
+                                if (showTerminal) controlling.remove(current.id)
                                 terminalMode[current.id] = !showTerminal
                             }) {
                                 Icon(
@@ -375,7 +382,12 @@ fun MainScreen(
                                 },
                         ) { page ->
                             val pane = stablePages.getOrNull(page) ?: return@HorizontalPager
-                            if (terminalMode[pane.id] == true || !pane.hasChat) {
+                            // Once an agent shows up while you type, stay in the terminal
+                            // after you release control too; the top bar switches to chat.
+                            LaunchedEffect(pane.hasChat) {
+                                if (pane.hasChat && controlling[pane.id] == true) terminalMode[pane.id] = true
+                            }
+                            if (asTerminal(pane)) {
                                 // Swapped out only once the page stops being current: by then
                                 // the swipe start has already made the terminal drop focus.
                                 if (page == pager.currentPage) {
@@ -384,6 +396,7 @@ fun MainScreen(
                                         pane,
                                         swiping = pager.isScrollInProgress,
                                         startInControl = pane.id in autoControl,
+                                        onControlChange = { controlling[pane.id] = it },
                                     )
                                 } else {
                                     TerminalPlaceholder(pane)

@@ -55,6 +55,7 @@ fun TerminalPane(
     swiping: Boolean = false,
     /** Start typing right away, for a tab the phone just opened: nobody else is using it. */
     startInControl: Boolean = false,
+    onControlChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -98,6 +99,9 @@ fun TerminalPane(
     LaunchedEffect(swiping) {
         if (swiping) viewRef[0]?.let { dropFocus(context, it) }
     }
+    val controlChange by rememberUpdatedState(onControlChange)
+    LaunchedEffect(control) { controlChange(control) }
+    DisposableEffect(Unit) { onDispose { controlChange(false) } }
     // The flag can arrive after the first composition: herdr's event for the new pane may
     // come before the call that created it returns.
     LaunchedEffect(terminal, startInControl) {
