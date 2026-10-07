@@ -36,6 +36,14 @@ Commands are wrapped in `sh -c` because sshd runs them through the user's login 
 which may be fish or another non-POSIX shell. The herdr binary is found once per
 connection with `$SHELL -lc 'command -v herdr'`.
 
+When you leave the app while connected, `ConnectionService` runs as a foreground service
+for 3 minutes: a `shortService` on Android 14 and newer, which the system ends, and a timed
+service before that. Without it, Android freezes the app's process soon after you switch
+away, the socket dies, and every return waits for a new handshake. The service starts in
+`onStop`, which Android still allows during the grace period after the activity was visible.
+In the background the screens stop polling the snapshot and following transcripts; only
+sshj's keepalive runs.
+
 The device key lives in the Android Keystore. sshj signs through BouncyCastle, which
 cannot use Keystore keys, so `KeystoreEd25519Signature` and `KeystoreEcdsaSignature` sign
 through the platform JCA provider instead.

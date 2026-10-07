@@ -5,6 +5,9 @@
     <!-- Server discovery: find the Wi-Fi network's subnet and listen for Bonjour. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Keeps the SSH link open for a few minutes after leaving the app. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".HerdroidApp"
@@ -22,5 +25,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".data.ConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
     </application>
 </manifest>
