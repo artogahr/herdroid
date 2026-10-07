@@ -33,7 +33,8 @@ API that herdr already provides.
   shells open straight in the terminal.
 - **herdr's layout.** The side panel shows spaces on top and agents below, with a status dot
   for each agent. Swipe between the panes of a tab, and on into the next tab.
-- **Spaces and agents.** Create and rename spaces, and rename agents, from the phone.
+- **Spaces and agents.** Create spaces from a folder on the server, rename spaces and agents,
+  and start an agent in any shell from the phone.
 - **Saved servers.** Herdroid connects to the last server on launch and reconnects when the
   connection drops. Add server finds SSH servers on your Wi-Fi and over Bonjour. Once you
   are connected to one server, it also lists the other machines on your tailnet.
@@ -84,6 +85,8 @@ must be on the `PATH` that your shell sets up at login.
 | Open spaces and agents | Tap the menu button, or swipe right from the first pane |
 | Switch panes | Swipe left or right |
 | Start an agent or a terminal | Tap **+** next to the page dots and pick one |
+| Start an agent in a terminal | Tap **Agent** above the terminal |
+| Switch apps without reconnecting | Automatic for 3 minutes after you leave. Tap **Disconnect** in the notification to stop early. |
 | Switch between chat and terminal | Tap the icon at the top right |
 | Answer a question | Tap a choice on the card above the message box |
 | Stop the agent | Tap the stop button while it is working |

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.3.0
+
+- Herdroid stays connected for 3 minutes after you switch to another app, so a quick switch back no longer waits for a reconnect. A notification shows while it stays connected and has a Disconnect button. In the background only the SSH link stays open; the app stops polling herdr and following chats until you return.
+- New space asks for the folder first and names the space after it. You can still type another name. The folder field suggests subfolders on the server.
+- A new space opens the agent picker for its first shell. Pick Terminal, or close the picker, to keep the shell.
+- A terminal without an agent has an **Agent** button that starts an agent in that shell.
+- An agent without a chat view, such as Antigravity, opens in control when you start it from the phone, so you can answer its questions right away.
+- The nearby servers list in Add server scrolls.
+
 ## 0.2.0
 
 - A + button next to the page dots opens a new tab in the current space. It lists the agent CLIs herdr finds on the server, with the last one you used first, and a Terminal button for a plain shell.
