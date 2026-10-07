@@ -199,7 +199,7 @@ private fun HostEditor(
         onDismissRequest = onDismiss,
         title = { Text(if (isNew) "Add server" else "Edit server") },
         text = {
-            Column(Modifier.imePadding(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.imePadding().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     name,
                     { name = it },
