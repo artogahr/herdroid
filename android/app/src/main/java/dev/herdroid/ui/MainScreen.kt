@@ -1,5 +1,10 @@
 package dev.herdroid.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -13,17 +18,21 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
@@ -62,12 +71,17 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import dev.herdroid.core.herdr.AgentStatus
 import dev.herdroid.core.herdr.HerdrApiException
 import dev.herdroid.core.herdr.Launcher
@@ -80,9 +94,11 @@ import dev.herdroid.data.Connection
 import dev.herdroid.data.ConnectionState
 import dev.herdroid.data.HerdrActions
 import dev.herdroid.data.HerdrSession
+import dev.herdroid.data.listFolders
 import dev.herdroid.thread.ThreadController
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -97,7 +113,21 @@ fun MainScreen(
     // Both outlive reconnects: they keep what they loaded and re-bind to the new link.
     val session = remember { HerdrSession(scope) }
     val threads = remember { HashMap<String, ThreadController>() }
-    val live = reconnecting == null
+    // In the background only the SSH link stays open (see ConnectionService). Polling the
+    // snapshot and following transcripts there would drain the battery for nothing.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val started by lifecycle.currentStateAsState()
+    val live = reconnecting == null && started.isAtLeast(Lifecycle.State.STARTED)
+    // The ongoing notification carries the Disconnect action; Android 13 hides it without this.
+    val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
     LaunchedEffect(connected, live) {
         if (live) {
             session.bind(connected)
@@ -132,7 +162,8 @@ fun MainScreen(
     var launchers by remember(connected) { mutableStateOf<List<Launcher>?>(null) }
     var launchersError by remember { mutableStateOf<String?>(null) }
     var launching by remember { mutableStateOf<String?>(null) }
-    // Terminal tabs opened from the phone start in control: nobody else is using them yet.
+    // Terminals and chat-less agents started from the phone start in control: nobody else is
+    // using them yet.
     // Keyed by pane, true once it has been on screen; cleared when you swipe away.
     val autoControl = remember { mutableStateMapOf<String, Boolean>() }
 
@@ -237,27 +268,48 @@ fun MainScreen(
     fun asTerminal(pane: Pane) = terminalMode[pane.id] == true || !pane.hasChat || controlling[pane.id] == true
     val showTerminal = current != null && asTerminal(current)
 
-    /** Opens a tab in the space and starts [launcher] in it, or leaves a shell when null. */
+    /**
+     * Starts [launcher] in the request's shell pane, or in a new tab of its space. A null
+     * launcher leaves a shell to type in.
+     */
     fun launch(
-        workspaceId: String,
+        request: NewTab,
         folder: String?,
         launcher: Launcher?,
     ) {
         if (launching != null) return
+        val existing = request.paneId
+        if (existing != null && launcher == null) {
+            autoControl[existing] = false
+            newTab = null
+            return
+        }
         launching = launcher?.kind ?: TERMINAL
         val previous = selectedId
         scope.launch {
             try {
-                val tab = actions.createTab(workspaceId, folder) ?: error("herdr did not return the new tab")
-                if (launcher == null) autoControl[tab.paneId] = false
-                selectedId = tab.paneId
-                connection.lastPaneId = tab.paneId
+                val tab =
+                    if (existing == null) {
+                        actions.createTab(checkNotNull(request.workspaceId), folder) ?: error("herdr did not return the new tab")
+                    } else {
+                        null
+                    }
+                val paneId = tab?.paneId ?: existing!!
+                // Without a chat, the terminal is the only way to answer the agent, so start in
+                // control like a terminal tab.
+                if (launcher == null || launcher.kind !in chatKinds) autoControl[paneId] = false
+                // Started from this pane's terminal: show the agent's chat once herdr detects
+                // it, instead of staying in the terminal you were typing in.
+                controlling.remove(paneId)
+                terminalMode.remove(paneId)
+                selectedId = paneId
+                connection.lastPaneId = paneId
                 newTab = null
                 session.refreshNow()
                 if (launcher != null) {
                     prefs.updateLastAgentKind(launcher.kind)
                     try {
-                        actions.startAgent(tab.paneId, launcher.kind)
+                        actions.startAgent(paneId, launcher.kind)
                     } catch (e: HerdrApiException) {
                         // The agent started but stopped at a question, such as trusting the
                         // folder: keep the tab so it can be answered in the terminal.
@@ -265,10 +317,13 @@ fun MainScreen(
                             snackbar.showSnackbar("${launcher.label} is waiting for an answer in the terminal.")
                             return@launch
                         }
-                        // Nothing started: don't leave an empty shell behind.
-                        runCatching { actions.closeTab(tab.tabId) }
-                        selectedId = previous
-                        connection.lastPaneId = previous
+                        // Nothing started: don't leave an empty shell behind. A shell that
+                        // was there before stays.
+                        if (tab != null) {
+                            runCatching { actions.closeTab(tab.tabId) }
+                            selectedId = previous
+                            connection.lastPaneId = previous
+                        }
                         throw e
                     }
                     session.refreshNow()
@@ -357,7 +412,8 @@ fun MainScreen(
                 if (current != null) {
                     PageDots(stablePages, pager.currentPage, onNewTab = {
                         focus.clearFocus(force = true)
-                        newTab = NewTab(current.workspaceId, current.foregroundCwd ?: current.cwd)
+                        newTab =
+                            NewTab(spaceLabel(snapshot, current.workspaceId), current.workspaceId, current.foregroundCwd ?: current.cwd)
                     })
                 }
                 when {
@@ -397,6 +453,15 @@ fun MainScreen(
                                         swiping = pager.isScrollInProgress,
                                         startInControl = pane.id in autoControl,
                                         onControlChange = { controlling[pane.id] = it },
+                                        onStartAgent =
+                                            if (pane.agent == null) {
+                                                {
+                                                    focus.clearFocus(force = true)
+                                                    newTab = NewTab(spaceLabel(snapshot, pane.workspaceId), pane.workspaceId, null, pane.id)
+                                                }
+                                            } else {
+                                                null
+                                            },
                                     )
                                 } else {
                                     TerminalPlaceholder(pane)
@@ -421,17 +486,11 @@ fun MainScreen(
                 .onFailure { if (launchers == null) launchersError = it.message ?: "Could not list agents" }
         }
         NewTabSheet(
-            space =
-                snapshot
-                    ?.workspaces
-                    ?.firstOrNull { it.id == request.workspaceId }
-                    ?.label
-                    .orEmpty(),
-            folder = request.folder.orEmpty(),
+            request = request,
             launchers = launchers?.let { Launchers.sorted(it, prefs.lastAgentKind, chatKinds) },
             error = launchersError,
             launching = launching,
-            onLaunch = { launcher, folder -> launch(request.workspaceId, folder.trim().ifBlank { null }, launcher) },
+            onLaunch = { launcher, folder -> launch(request, folder.trim().ifBlank { null }, launcher) },
             onDismiss = { if (launching == null) newTab = null },
         )
     }
@@ -439,6 +498,7 @@ fun MainScreen(
         NameDialogView(
             dialog = d,
             error = actionError,
+            listFolders = { dir -> listFolders(connected.transport, dir) },
             onDismiss = {
                 dialog = null
                 actionError = null
@@ -447,9 +507,20 @@ fun MainScreen(
                 scope.launch {
                     runCatching {
                         when (d) {
-                            is NameDialog.NewSpace -> actions.createSpace(name, folder)?.let { selectedId = it }
-                            is NameDialog.RenameSpace -> actions.renameSpace(d.workspace.id, name)
-                            is NameDialog.RenamePane -> actions.renamePane(d.pane.id, name)
+                            is NameDialog.NewSpace -> {
+                                actions.createSpace(name, folder)?.let { paneId ->
+                                    selectedId = paneId
+                                    newTab = NewTab(name, null, folder, paneId, newSpace = true)
+                                }
+                            }
+
+                            is NameDialog.RenameSpace -> {
+                                actions.renameSpace(d.workspace.id, name)
+                            }
+
+                            is NameDialog.RenamePane -> {
+                                actions.renamePane(d.pane.id, name)
+                            }
                         }
                     }.onSuccess {
                         dialog = null
@@ -560,36 +631,63 @@ private const val TERMINAL = "terminal"
 private val chatKinds = AgentKind.entries.map { it.name.lowercase() }.toSet()
 
 private data class NewTab(
-    val workspaceId: String,
+    val space: String,
+    /** The space to open a tab in; null when the agent starts in [paneId]. */
+    val workspaceId: String?,
     val folder: String?,
+    /** A shell pane to start the agent in, instead of opening a tab. */
+    val paneId: String? = null,
+    /** The pane is the shell a new space starts with. */
+    val newSpace: Boolean = false,
 )
 
-/** Pick what the new tab runs: an agent herdr found on the server, or a plain terminal. */
+private fun spaceLabel(
+    snapshot: Snapshot?,
+    workspaceId: String,
+) = snapshot
+    ?.workspaces
+    ?.firstOrNull { it.id == workspaceId }
+    ?.label
+    .orEmpty()
+
+/**
+ * Pick what runs: an agent herdr found on the server, or a plain terminal. Runs in a new tab,
+ * or in the request's shell pane when it has one.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NewTabSheet(
-    space: String,
-    folder: String,
+    request: NewTab,
     launchers: List<Launcher>?,
     error: String?,
     launching: String?,
     onLaunch: (Launcher?, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var path by remember { mutableStateOf(folder) }
+    var path by remember { mutableStateOf(request.folder.orEmpty()) }
+    val space = request.space
+    val title =
+        when {
+            request.newSpace -> "Start in $space"
+            request.paneId != null -> "Start an agent here"
+            space.isBlank() -> "New tab"
+            else -> "New tab in $space"
+        }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             Modifier.padding(horizontal = 24.dp).padding(bottom = 16.dp).navigationBarsPadding(),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(if (space.isBlank()) "New tab" else "New tab in $space", style = MaterialTheme.typography.titleLarge)
-            OutlinedTextField(
-                path,
-                { path = it },
-                label = { Text("Folder on the server") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            if (request.paneId == null) {
+                OutlinedTextField(
+                    path,
+                    { path = it },
+                    label = { Text("Folder on the server") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             when {
                 launchers == null && error == null -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -626,18 +724,21 @@ private fun NewTabSheet(
                     }
                 }
             }
-            OutlinedButton(
-                onClick = { onLaunch(null, path) },
-                enabled = launching == null,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                if (launching == TERMINAL) {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(Icons.Filled.Terminal, null, Modifier.size(18.dp))
+            // Starting from a terminal's button, you already have the terminal.
+            if (request.paneId == null || request.newSpace) {
+                OutlinedButton(
+                    onClick = { onLaunch(null, path) },
+                    enabled = launching == null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (launching == TERMINAL) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Filled.Terminal, null, Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text("Terminal")
                 }
-                Spacer(Modifier.width(8.dp))
-                Text("Terminal")
             }
         }
     }
@@ -724,6 +825,7 @@ private sealed interface NameDialog {
 private fun NameDialogView(
     dialog: NameDialog,
     error: String?,
+    listFolders: suspend (String) -> List<String>,
     onDismiss: () -> Unit,
     onConfirm: (String, String?) -> Unit,
 ) {
@@ -736,35 +838,55 @@ private fun NameDialogView(
     // Start with the old name selected, so typing replaces it as in Android's rename dialogs.
     var field by remember(dialog) { mutableStateOf(TextFieldValue(initial, TextRange(0, initial.length))) }
     val name = field.text
-    var folder by remember(dialog) { mutableStateOf((dialog as? NameDialog.NewSpace)?.folder.orEmpty()) }
+    val startFolder = (dialog as? NameDialog.NewSpace)?.folder?.let { it.trimEnd('/') + "/" }.orEmpty()
+    var folderField by remember(dialog) { mutableStateOf(TextFieldValue(startFolder, TextRange(startFolder.length))) }
+    val folder = folderField.text.trim().let { if (it.length > 1) it.trimEnd('/') else it }
+    val derivedName = folder.substringAfterLast('/').takeIf { it.isNotBlank() && it != "~" }
     val requester = remember { FocusRequester() }
     LaunchedEffect(dialog) { requester.requestFocus() }
     // An agent's label may be cleared to fall back to its terminal title; spaces need a name.
-    val valid = name.isNotBlank() || dialog is NameDialog.RenamePane
+    val valid =
+        when (dialog) {
+            is NameDialog.NewSpace -> name.isNotBlank() || derivedName != null
+            is NameDialog.RenameSpace -> name.isNotBlank()
+            is NameDialog.RenamePane -> true
+        }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    field,
-                    { field = it },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().focusRequester(requester),
-                )
                 if (dialog is NameDialog.NewSpace) {
                     OutlinedTextField(
-                        folder,
-                        { folder = it },
+                        folderField,
+                        { folderField = it },
                         label = { Text("Folder on the server") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().focusRequester(requester),
+                    )
+                    FolderSuggestions(folderField.text, listFolders) { picked ->
+                        folderField = TextFieldValue(picked, TextRange(picked.length))
+                    }
+                    OutlinedTextField(
+                        field,
+                        { field = it },
+                        label = { Text("Name") },
+                        placeholder = derivedName?.let { { Text(it) } },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
-                        "The space starts with a shell in this folder.",
+                        "The name defaults to the folder's name. Next you pick an agent to start there.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    OutlinedTextField(
+                        field,
+                        { field = it },
+                        label = { Text("Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().focusRequester(requester),
                     )
                 }
                 if (dialog is NameDialog.RenamePane) {
@@ -778,10 +900,57 @@ private fun NameDialogView(
             }
         },
         confirmButton = {
-            TextButton(enabled = valid, onClick = { onConfirm(name.trim(), folder.trim().ifBlank { null }) }) {
+            TextButton(enabled = valid, onClick = {
+                val finalName = name.trim().ifBlank { derivedName.orEmpty() }
+                onConfirm(finalName, folder.ifBlank { null })
+            }) {
                 Text(if (dialog is NameDialog.NewSpace) "Create" else "Rename")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/**
+ * Subfolders that complete what is typed after the last slash. The listing is fetched once
+ * per parent folder; typing more only filters it.
+ */
+@Composable
+private fun FolderSuggestions(
+    typed: String,
+    listFolders: suspend (String) -> List<String>,
+    onPick: (String) -> Unit,
+) {
+    val slash = typed.lastIndexOf('/')
+    if (slash < 0) return
+    val parent = typed.substring(0, slash + 1)
+    val prefix = typed.substring(slash + 1)
+    var listing by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
+    LaunchedEffect(parent) {
+        delay(250)
+        listing = parent to runCatching { listFolders(parent) }.getOrDefault(emptyList())
+    }
+    val folders =
+        listing
+            ?.takeIf { it.first == parent }
+            ?.second
+            ?.filter { it.startsWith(prefix) && it != prefix && (prefix.startsWith('.') || !it.startsWith('.')) }
+            .orEmpty()
+    if (folders.isEmpty()) return
+    Column(Modifier.fillMaxWidth().heightIn(max = 180.dp).verticalScroll(rememberScrollState())) {
+        folders.forEach { name ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onPick("$parent$name/") }
+                    .padding(horizontal = 8.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Folder, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(10.dp))
+                Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
 }

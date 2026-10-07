@@ -10,9 +10,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -56,6 +62,8 @@ fun TerminalPane(
     /** Start typing right away, for a tab the phone just opened: nobody else is using it. */
     startInControl: Boolean = false,
     onControlChange: (Boolean) -> Unit = {},
+    /** Opens the agent picker for this pane; null when an agent already runs in it. */
+    onStartAgent: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -130,6 +138,19 @@ fun TerminalPane(
             )
             if (closedReason != null) {
                 TextButton(onClick = { attempt++ }) { Text("Retry") }
+            }
+            if (onStartAgent != null && closedReason == null) {
+                AssistChip(
+                    onClick = {
+                        // The chat replaces this view once the agent starts; a focused view
+                        // must not be removed (see dropFocus).
+                        viewRef[0]?.let { dropFocus(context, it) }
+                        onStartAgent()
+                    },
+                    label = { Text("Agent") },
+                    leadingIcon = { Icon(Icons.Filled.Add, null, Modifier.size(AssistChipDefaults.IconSize)) },
+                    modifier = Modifier.padding(end = 8.dp),
+                )
             }
             FilterChip(
                 selected = control,
